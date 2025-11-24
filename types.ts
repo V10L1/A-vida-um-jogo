@@ -7,6 +7,7 @@ export interface UserProfile {
   height: number;
   gender: Gender;
   profession: string;
+  avatarImage?: string; // Base64 string da imagem customizada
 }
 
 export interface ActivityType {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, RPG_CLASSES } from './types';
 import { getIcon } from './components/Icons';
 import { generateRpgFlavorText } from './services/geminiService';
@@ -158,6 +158,9 @@ export default function App() {
   // Constants
   const XP_FOR_NEXT_LEVEL_BASE = 100;
   
+  // File Input Ref
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  
   // Initialize & Auth Listener
   useEffect(() => {
     const savedUser = localStorage.getItem('liferpg_user');
@@ -277,12 +280,56 @@ export default function App() {
         weight: Number(formData.get('weight')),
         height: Number(formData.get('height')),
         gender: formData.get('gender') as Gender,
-        profession: formData.get('profession') as string
+        profession: formData.get('profession') as string,
+        // avatarImage já está no estado user se foi alterado
     };
     
     setUser(updatedUser);
     setIsEditingProfile(false);
     setNarratorText(`Perfil atualizado! Você parece diferente, ${updatedUser.name}.`);
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+            // Criar canvas para redimensionar (comprimir) a imagem
+            // LocalStorage tem limite de 5MB, Firestore 1MB. Vamos garantir que fique pequeno.
+            const canvas = document.createElement('canvas');
+            const MAX_WIDTH = 300;
+            const MAX_HEIGHT = 300;
+            let width = img.width;
+            let height = img.height;
+
+            if (width > height) {
+                if (width > MAX_WIDTH) {
+                    height *= MAX_WIDTH / width;
+                    width = MAX_WIDTH;
+                }
+            } else {
+                if (height > MAX_HEIGHT) {
+                    width *= MAX_HEIGHT / height;
+                    height = MAX_HEIGHT;
+                }
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx?.drawImage(img, 0, 0, width, height);
+            
+            // Converter para base64 comprimido
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            
+            setUser({ ...user, avatarImage: dataUrl });
+        };
+        img.src = event.target.result as string;
+    };
+    reader.readAsDataURL(file);
   };
 
   const updateNarrator = async (u: UserProfile, g: GameState, activityName?: string, isInit = false) => {
@@ -429,6 +476,9 @@ export default function App() {
 
   const getAvatarUrl = useMemo(() => {
     if (!user) return '';
+    // Se o usuário tiver uma imagem carregada, usa ela
+    if (user.avatarImage) return user.avatarImage;
+
     const seed = user.name.replace(/\s/g, '');
     let style = 'micah'; // Estilo padrão bonito
     if (user.gender === 'Masculino') {
@@ -663,8 +713,27 @@ export default function App() {
                  )}
              </div>
 
-             <div className="w-32 h-32 rounded-full border-4 border-slate-700 bg-slate-800 overflow-hidden mb-4 shadow-2xl relative z-0">
-                <img src={getAvatarUrl} alt="Avatar Grande" className="w-full h-full object-cover" />
+             <div className="relative mb-4">
+                <div className="w-32 h-32 rounded-full border-4 border-slate-700 bg-slate-800 overflow-hidden shadow-2xl relative z-0">
+                    <img src={getAvatarUrl} alt="Avatar Grande" className="w-full h-full object-cover" />
+                </div>
+                {isEditingProfile && (
+                    <>
+                        <input 
+                            type="file" 
+                            accept="image/*" 
+                            ref={fileInputRef} 
+                            onChange={handleImageUpload} 
+                            className="hidden" 
+                        />
+                        <button 
+                            onClick={() => fileInputRef.current?.click()}
+                            className="absolute bottom-0 right-0 bg-blue-600 hover:bg-blue-500 text-white p-2 rounded-full shadow-lg border border-slate-900 transition-colors z-20"
+                        >
+                            {getIcon("Camera", "w-5 h-5")}
+                        </button>
+                    </>
+                )}
              </div>
 
              {isEditingProfile ? (

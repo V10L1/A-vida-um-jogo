@@ -27,7 +27,8 @@ import {
   Star,
   Pencil,
   Save,
-  X
+  X,
+  Camera
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -65,6 +66,7 @@ export const getIcon = (name: string, className?: string) => {
     case 'Pencil': return <Pencil {...props} />;
     case 'Save': return <Save {...props} />;
     case 'X': return <X {...props} />;
+    case 'Camera': return <Camera {...props} />;
     
     default: return <Activity {...props} />;
   }
