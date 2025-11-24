@@ -22,12 +22,19 @@ export interface ActivityLog {
   timestamp: number;
 }
 
+export interface XpBuff {
+  multiplier: number; // ex: 1.16 para +16%
+  expiresAt: number; // Timestamp de quando acaba
+  description: string;
+}
+
 export interface GameState {
   level: number;
   currentXp: number;
   totalXp: number;
   logs: ActivityLog[];
   classTitle: string; // e.g., "Novato", "Guerreiro", "Mestre"
+  activeBuff?: XpBuff | null;
 }
 
 export const ACTIVITIES: ActivityType[] = [

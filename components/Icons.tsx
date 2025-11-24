@@ -10,7 +10,9 @@ import {
   User,
   Activity,
   ChevronRight,
-  Plus
+  Plus,
+  Moon,
+  Clock
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -27,6 +29,8 @@ export const getIcon = (name: string, className?: string) => {
     case 'Activity': return <Activity {...props} />;
     case 'ChevronRight': return <ChevronRight {...props} />;
     case 'Plus': return <Plus {...props} />;
+    case 'Moon': return <Moon {...props} />;
+    case 'Clock': return <Clock {...props} />;
     default: return <Activity {...props} />;
   }
 };

@@ -48,11 +48,18 @@ export default function App() {
     currentXp: 0,
     totalXp: 0,
     logs: [],
-    classTitle: "Novato"
+    classTitle: "Novato",
+    activeBuff: null
   });
   const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
+  const [isSleepModalOpen, setIsSleepModalOpen] = useState(false);
   const [selectedActivity, setSelectedActivity] = useState<ActivityType | null>(null);
   const [inputAmount, setInputAmount] = useState('');
+  
+  // Sleep Inputs
+  const [bedTime, setBedTime] = useState('22:00');
+  const [wakeTime, setWakeTime] = useState('06:00');
+
   const [narratorText, setNarratorText] = useState<string>("Bem-vindo ao LifeRPG. Comece sua jornada!");
   const [loadingAi, setLoadingAi] = useState(false);
   const [showLevelUp, setShowLevelUp] = useState(false);
@@ -71,13 +78,16 @@ export default function App() {
     const savedGame = localStorage.getItem('liferpg_game');
     
     if (savedUser) setUser(JSON.parse(savedUser));
-    if (savedGame) setGameState(JSON.parse(savedGame));
+    if (savedGame) {
+        // Garantir retrocompatibilidade com saves antigos sem activeBuff
+        const parsedGame = JSON.parse(savedGame);
+        setGameState(prev => ({ ...prev, ...parsedGame }));
+    }
 
-    // 2. Checar resultado de login via redirect (Tratar erros de login aqui)
+    // 2. Checar resultado de login via redirect
     const checkLoginErrors = async () => {
         try {
             await checkRedirectResult();
-            // Sucesso é tratado no onAuthStateChanged abaixo
         } catch (error: any) {
             console.error("Erro no retorno do login:", error);
             let errorMessage = "Erro desconhecido ao conectar.";
@@ -99,16 +109,13 @@ export default function App() {
       const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
         setCurrentUser(firebaseUser);
         if (firebaseUser) {
-          // Se logou, tenta baixar dados da nuvem
           setIsSyncing(true);
           const cloudData = await loadUserDataFromCloud(firebaseUser.uid);
           if (cloudData) {
-            // Se tem dados na nuvem, usa eles (Prioridade para Nuvem)
             setUser(cloudData.userProfile);
-            setGameState(cloudData.gameState);
+            setGameState(prev => ({ ...prev, ...cloudData.gameState })); // Merge para garantir campos novos
             setNarratorText("Sincronização completa. Bem-vindo de volta, herói!");
           } else {
-            // Se não tem dados na nuvem, mas tem local, sobe os dados locais
             if (savedUser && savedGame) {
               await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
             }
@@ -124,7 +131,6 @@ export default function App() {
   useEffect(() => {
     if (user) {
       localStorage.setItem('liferpg_user', JSON.stringify(user));
-      // Save to cloud if logged in
       if (currentUser && gameState) {
         saveUserDataToCloud(currentUser.uid, user, gameState);
       }
@@ -134,7 +140,6 @@ export default function App() {
   useEffect(() => {
     if (gameState) {
       localStorage.setItem('liferpg_game', JSON.stringify(gameState));
-      // Save to cloud if logged in
       if (currentUser && user) {
          saveUserDataToCloud(currentUser.uid, user, gameState);
       }
@@ -146,7 +151,6 @@ export default function App() {
   const handleGoogleLogin = async () => {
     try {
       await loginWithGoogle();
-      // O fluxo de redirecionamento vai recarregar a página, então nada aqui roda imediatamente.
     } catch (e: any) {
       console.error(e);
       if (e.code === 'auth/unauthorized-domain') {
@@ -159,14 +163,9 @@ export default function App() {
 
   const handleLogout = async () => {
     await logoutUser();
-    // Opcional: Limpar dados locais ao sair?
-    // setUser(null); 
-    // setGameState(...);
-    // Por enquanto, mantemos os dados locais para permitir uso offline
   };
 
   const calculateXpForNextLevel = (level: number) => {
-    // Linear scaling: Level 1 needs 100, Level 2 needs 200, etc.
     return level * XP_FOR_NEXT_LEVEL_BASE;
   };
 
@@ -180,7 +179,6 @@ export default function App() {
       height: Number(formData.get('height')),
     };
     setUser(newUser);
-    // Initial flavor text
     updateNarrator(newUser, gameState, undefined, true);
   };
 
@@ -188,13 +186,11 @@ export default function App() {
     setLoadingAi(true);
     try {
       if (isInit) {
-          // Just a greeting
           setNarratorText(`Bem-vindo, ${u.name}. Sua aventura começa agora.`);
       } else {
           const text = await generateRpgFlavorText(u, g, activityName);
           setNarratorText(text);
           
-          // Update class title occasionally
           if (Math.random() > 0.7 || showLevelUp) {
              const title = await generateClassTitle(g);
              setGameState(prev => ({...prev, classTitle: title}));
@@ -211,7 +207,22 @@ export default function App() {
     if (!selectedActivity || !inputAmount || isNaN(Number(inputAmount))) return;
 
     const amount = Number(inputAmount);
-    const xpGained = Math.floor(amount * selectedActivity.xpPerUnit);
+    
+    // Calcular XP base
+    let xpGained = Math.floor(amount * selectedActivity.xpPerUnit);
+
+    // Aplicar Buff se ativo
+    let buffApplied = false;
+    if (gameState.activeBuff) {
+        const now = Date.now();
+        if (now < gameState.activeBuff.expiresAt) {
+            xpGained = Math.floor(xpGained * gameState.activeBuff.multiplier);
+            buffApplied = true;
+        } else {
+            // Buff expirou, limpar silenciosamente
+            // (Será limpo no próximo setGameState)
+        }
+    }
     
     const newLog: ActivityLog = {
       id: Date.now().toString(),
@@ -226,7 +237,6 @@ export default function App() {
     let newLevel = gameState.level;
     let leveledUp = false;
 
-    // Level up logic
     let xpNeeded = calculateXpForNextLevel(newLevel);
     while (newCurrentXp >= xpNeeded) {
       newCurrentXp -= xpNeeded;
@@ -235,12 +245,18 @@ export default function App() {
       leveledUp = true;
     }
 
+    // Remover buff se expirado
+    const activeBuff = (gameState.activeBuff && Date.now() < gameState.activeBuff.expiresAt) 
+        ? gameState.activeBuff 
+        : null;
+
     const newState = {
       ...gameState,
       level: newLevel,
       currentXp: newCurrentXp,
       totalXp: newTotalXp,
-      logs: [newLog, ...gameState.logs].slice(0, 50), // keep last 50
+      logs: [newLog, ...gameState.logs].slice(0, 50),
+      activeBuff: activeBuff
     };
 
     setGameState(newState);
@@ -253,13 +269,91 @@ export default function App() {
       setTimeout(() => setShowLevelUp(false), 5000);
       updateNarrator(user!, newState, "LEVEL UP");
     } else {
-      updateNarrator(user!, newState, selectedActivity.label);
+      updateNarrator(user!, newState, selectedActivity.label + (buffApplied ? " (Buffado)" : ""));
     }
   };
+
+  const handleRegisterSleep = () => {
+    // 1. Calcular horas dormidas
+    const [bedH, bedM] = bedTime.split(':').map(Number);
+    const [wakeH, wakeM] = wakeTime.split(':').map(Number);
+    
+    let sleepDuration = 0;
+    
+    // Normalizar para minutos do dia (0 a 1440)
+    const bedMinutes = bedH * 60 + bedM;
+    const wakeMinutes = wakeH * 60 + wakeM;
+    
+    if (wakeMinutes >= bedMinutes) {
+        // Dormiu e acordou no mesmo dia (ex: soneca)
+        sleepDuration = (wakeMinutes - bedMinutes) / 60;
+    } else {
+        // Virou a noite
+        sleepDuration = ((1440 - bedMinutes) + wakeMinutes) / 60;
+    }
+
+    if (sleepDuration <= 0) {
+        alert("Horários inválidos.");
+        return;
+    }
+
+    // 2. Calcular Buff
+    // Regra: 2% por hora até 9h. Após 9h, reduz 2% por hora excedida.
+    let percentage = 0;
+    if (sleepDuration <= 9) {
+        percentage = sleepDuration * 2;
+    } else {
+        const base = 9 * 2; // 18%
+        const excess = sleepDuration - 9;
+        const penalty = excess * 2;
+        percentage = Math.max(0, base - penalty);
+    }
+    
+    const multiplier = 1 + (percentage / 100);
+
+    // 3. Definir validade (Até o horário de dormir HOJE)
+    const now = new Date();
+    const expireDate = new Date();
+    expireDate.setHours(bedH, bedM, 0, 0);
+
+    // Se o horário de expiração já passou hoje (ex: registrou sono às 23h, e bedTime é 22h),
+    // assume-se que é para amanhã.
+    // Mas a lógica do prompt diz "até as 22h daquele dia" (dia do registro).
+    // Se eu registrar as 08:00 da manhã que fui dormir as 22:00, o buff dura até hoje as 22:00.
+    if (expireDate.getTime() < now.getTime()) {
+        // Se já passou, talvez o usuário esteja registrando atrasado ou o "bedTime" é muito cedo.
+        // Vamos garantir que seja no futuro próximo (hoje a noite)
+        if (now.getHours() > bedH) {
+             // Se agora é 23h e bedTime é 22h, o buff já expirou se fosse hoje.
+             // Nesse caso, o buff dura até amanhã às 22h? 
+             // Pela lógica do "ciclo diário", faz sentido durar até o próximo ciclo.
+             expireDate.setDate(expireDate.getDate() + 1);
+        }
+    }
+
+    const newBuff = {
+        multiplier: Number(multiplier.toFixed(2)),
+        expiresAt: expireDate.getTime(),
+        description: `Buff de Sono: +${percentage.toFixed(0)}% XP`
+    };
+
+    setGameState(prev => ({
+        ...prev,
+        activeBuff: newBuff
+    }));
+
+    setIsSleepModalOpen(false);
+    setNarratorText(`Sono registrado! Você ganhou um bônus de ${percentage.toFixed(0)}% de XP até as ${bedTime}.`);
+  };
+
+  // Check active buff validity for UI
+  const isBuffActive = gameState.activeBuff && Date.now() < gameState.activeBuff.expiresAt;
+  const buffPercentage = isBuffActive ? Math.round((gameState.activeBuff!.multiplier - 1) * 100) : 0;
 
   // --- Views ---
 
   if (!user) {
+     // ... (Mantendo código de onboarding igual)
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950">
         <div className="w-full max-w-md space-y-8">
@@ -292,7 +386,6 @@ export default function App() {
               Iniciar Aventura
             </button>
           </form>
-          {/* Login option for restoration */}
            <div className="text-center pt-4">
               <p className="text-slate-500 text-sm mb-2">Já tem uma conta?</p>
               <button 
@@ -328,17 +421,23 @@ export default function App() {
         <div className="max-w-2xl mx-auto p-4">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center font-bold text-xl shadow-lg border-2 border-slate-700">
+              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center font-bold text-xl shadow-lg border-2 border-slate-700 relative">
                 {user.name.charAt(0).toUpperCase()}
+                {isBuffActive && (
+                    <div className="absolute -bottom-1 -right-1 bg-purple-600 border border-slate-900 rounded-full p-1 w-5 h-5 flex items-center justify-center" title="Buff Ativo">
+                        {getIcon("Zap", "w-3 h-3 text-white")}
+                    </div>
+                )}
               </div>
               <div>
-                <h1 className="font-bold text-lg leading-tight">{user.name}</h1>
+                <h1 className="font-bold text-lg leading-tight flex items-center gap-2">
+                    {user.name}
+                </h1>
                 <p className="text-xs text-blue-400 font-medium tracking-wider uppercase">{gameState.classTitle}</p>
               </div>
             </div>
             
             <div className="flex flex-col items-end gap-1">
-               {/* Cloud Save Button */}
                {currentUser ? (
                   <button 
                     onClick={handleLogout}
@@ -368,9 +467,16 @@ export default function App() {
               <span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-blue-100 bg-slate-800 border border-slate-700">
                 XP {gameState.currentXp} / {xpNeeded}
               </span>
-              <span className="text-xs font-semibold text-blue-200">
-                {Math.round((gameState.currentXp / xpNeeded) * 100)}%
-              </span>
+              {isBuffActive && (
+                  <span className="text-xs font-bold text-purple-400 animate-pulse flex items-center gap-1">
+                      {getIcon("Clock", "w-3 h-3")} +{buffPercentage}% XP (até {new Date(gameState.activeBuff!.expiresAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})})
+                  </span>
+              )}
+              {!isBuffActive && (
+                 <span className="text-xs font-semibold text-blue-200">
+                    {Math.round((gameState.currentXp / xpNeeded) * 100)}%
+                 </span>
+              )}
             </div>
             <ProgressBar current={gameState.currentXp} max={xpNeeded} color="bg-gradient-to-r from-blue-500 to-indigo-400" />
           </div>
@@ -392,7 +498,6 @@ export default function App() {
                  "{narratorText}"
                </p>
                {loadingAi && <span className="text-xs text-blue-500 animate-pulse mt-1 block">O Mestre está pensando...</span>}
-               {isSyncing && <span className="text-xs text-emerald-500 mt-1 block">Sincronizando com os arquivos sagrados...</span>}
              </div>
           </div>
         </div>
@@ -417,9 +522,21 @@ export default function App() {
                   {getIcon(act.icon)}
                 </div>
                 <span className="font-semibold text-sm">{act.label}</span>
-                <span className="text-xs text-slate-400">+{act.xpPerUnit} XP</span>
+                <span className="text-xs text-slate-400">+{isBuffActive ? Math.floor(act.xpPerUnit * gameState.activeBuff!.multiplier) : act.xpPerUnit} XP</span>
               </button>
             ))}
+            
+            {/* Sleep Button (Special) */}
+             <button
+                onClick={() => setIsSleepModalOpen(true)}
+                className="flex flex-col items-center justify-center p-4 bg-indigo-900/30 hover:bg-indigo-900/50 border border-indigo-800 hover:border-indigo-500/50 rounded-xl transition-all active:scale-95 group"
+              >
+                <div className="mb-2 p-3 rounded-full bg-slate-900 group-hover:bg-slate-800 text-indigo-400 group-hover:text-indigo-300 transition-colors">
+                  {getIcon("Moon")}
+                </div>
+                <span className="font-semibold text-sm text-indigo-200">Registrar Sono</span>
+                <span className="text-xs text-indigo-400/70">Buff de XP</span>
+              </button>
           </div>
         </div>
 
@@ -468,7 +585,10 @@ export default function App() {
             </div>
             <p className="text-slate-300 text-sm">
               Quanto você realizou? <br/>
-              <span className="text-blue-400 text-xs">Recompensa: {selectedActivity?.xpPerUnit} XP por {selectedActivity?.unit}</span>
+              <span className="text-blue-400 text-xs">
+                 Base: {selectedActivity?.xpPerUnit} XP
+                 {isBuffActive && <span className="text-purple-400 ml-1">x {gameState.activeBuff?.multiplier} (Buff)</span>}
+              </span>
             </p>
           </div>
 
@@ -493,6 +613,48 @@ export default function App() {
                 Confirmar Missão
              </button>
           </div>
+        </div>
+      </Modal>
+
+      {/* Sleep Modal */}
+      <Modal
+        isOpen={isSleepModalOpen}
+        onClose={() => setIsSleepModalOpen(false)}
+        title="Descanso do Guerreiro"
+      >
+        <div className="space-y-6">
+           <div className="bg-indigo-900/20 border border-indigo-800 rounded-lg p-4 text-sm text-indigo-200">
+              <p>O sono restaura suas energias. Ganhe <strong>+2% XP</strong> por hora dormida (máx 9h). Horas extras causam fadiga (-2% XP).</p>
+           </div>
+           
+           <div className="grid grid-cols-2 gap-4">
+              <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Fui dormir às</label>
+                  <input 
+                    type="time" 
+                    value={bedTime}
+                    onChange={(e) => setBedTime(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+              </div>
+              <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Acordei às</label>
+                  <input 
+                    type="time" 
+                    value={wakeTime}
+                    onChange={(e) => setWakeTime(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+              </div>
+           </div>
+
+           <button 
+                onClick={handleRegisterSleep}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-indigo-900/20"
+             >
+                {getIcon("Moon", "w-5 h-5")}
+                Dormir e Restaurar
+             </button>
         </div>
       </Modal>
 
