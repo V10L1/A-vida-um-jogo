@@ -13,8 +13,6 @@ export default defineConfig(({ mode }) => {
       'process.env.FIREBASE_STORAGE_BUCKET': JSON.stringify(env.FIREBASE_STORAGE_BUCKET || ''),
       'process.env.FIREBASE_MESSAGING_SENDER_ID': JSON.stringify(env.FIREBASE_MESSAGING_SENDER_ID || ''),
       'process.env.FIREBASE_APP_ID': JSON.stringify(env.FIREBASE_APP_ID || ''),
-      // Polyfill simple process.env access to prevent crashes
-      'process.env': JSON.stringify({}), 
     },
   };
 });
