@@ -137,10 +137,17 @@ const RadarChart = ({ attributes }: { attributes: Record<Attribute, number> }) =
 
 // --- Configuração das Categorias Principais ---
 const ACTIVITY_CATEGORIES = [
+  {
+    id: 'common',
+    label: 'Atividades Comuns',
+    types: ['health'], // Inclui Água e Sono
+    color: 'text-yellow-400',
+    icon: 'Star'
+  },
   { 
     id: 'physical', 
     label: 'Treino Físico', 
-    types: ['fitness', 'health'], 
+    types: ['fitness'], // Removed 'health'
     color: 'text-blue-400',
     icon: 'Dumbbell'
   },
@@ -372,7 +379,7 @@ export default function App() {
         if (act.unit === 'ação') dailyBase = 1;
         if (act.id === 'drive') dailyBase = 20;
         if (act.id === 'gym') dailyBase = 3; // 3 series por dia
-        if (act.id === 'sleep') dailyBase = 1; // 1 registro de sono
+        // Sleep removido da geração de quest
 
         if (type === 'weekly') return dailyBase * 7;
         return dailyBase;
@@ -1432,7 +1439,14 @@ export default function App() {
                         {ACTIVITIES.filter(act => category.types.includes(act.category)).map((act) => (
                         <button
                             key={act.id}
-                            onClick={() => { setSelectedActivity(act); setIsActivityModalOpen(true); }}
+                            onClick={() => { 
+                                if (act.id === 'sleep') {
+                                    setIsSleepModalOpen(true);
+                                } else {
+                                    setSelectedActivity(act); 
+                                    setIsActivityModalOpen(true); 
+                                }
+                            }}
                             className="flex flex-col items-center justify-center p-3 bg-slate-800/60 hover:bg-slate-700 border border-slate-700 hover:border-blue-500/50 rounded-xl transition-all active:scale-95 group"
                         >
                             <div className="mb-2 p-2 rounded-full bg-slate-900 group-hover:bg-slate-800 text-blue-400 group-hover:text-blue-300 transition-colors">
@@ -1442,17 +1456,6 @@ export default function App() {
                             <span className="text-[10px] text-slate-400 mt-1">+{isBuffActive ? Math.floor(act.xpPerUnit * gameState.activeBuff!.multiplier) : act.xpPerUnit} XP</span>
                         </button>
                         ))}
-                        
-                        {category.id === 'physical' && (
-                            <button
-                                onClick={() => setIsSleepModalOpen(true)}
-                                className="flex flex-col items-center justify-center p-3 bg-indigo-900/30 hover:bg-indigo-900/50 border border-indigo-800 hover:border-indigo-500/50 rounded-xl transition-all active:scale-95 group"
-                            >
-                                <div className="mb-2 p-2 rounded-full bg-slate-900 group-hover:bg-slate-800 text-indigo-400 group-hover:text-indigo-300 transition-colors">{getIcon("Moon")}</div>
-                                <span className="font-semibold text-xs text-indigo-200">Registrar Sono</span>
-                                <span className="text-[10px] text-indigo-400/70 mt-1">Recuperação</span>
-                            </button>
-                        )}
                      </div>
                 </div>
             ))}

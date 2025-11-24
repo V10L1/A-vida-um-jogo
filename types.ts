@@ -139,8 +139,8 @@ export const ATTRIBUTE_LABELS: Record<Attribute, string> = {
 };
 
 // IDs das atividades básicas para lógica de Quests
-// Adicionado 'sleep' para ser gerada nas básicas
-export const BASIC_ACTIVITY_IDS = ['walk', 'run', 'pushup', 'abs', 'water', 'sleep'];
+// Sleep removido para não gerar quest, apenas buff
+export const BASIC_ACTIVITY_IDS = ['walk', 'run', 'pushup', 'abs', 'water'];
 
 export const ACTIVITIES: ActivityType[] = [
   // --- Atividades Básicas (Missões Diárias Padrão) ---
