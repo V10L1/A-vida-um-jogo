@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType } from './types';
 import { getIcon } from './components/Icons';
 import { generateRpgFlavorText, generateClassTitle } from './services/geminiService';
-import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud } from './firebase';
+import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 
 // --- Helper Components ---
@@ -73,7 +73,28 @@ export default function App() {
     if (savedUser) setUser(JSON.parse(savedUser));
     if (savedGame) setGameState(JSON.parse(savedGame));
 
-    // 2. Configurar listener do Firebase
+    // 2. Checar resultado de login via redirect (Tratar erros de login aqui)
+    const checkLoginErrors = async () => {
+        try {
+            await checkRedirectResult();
+            // Sucesso é tratado no onAuthStateChanged abaixo
+        } catch (error: any) {
+            console.error("Erro no retorno do login:", error);
+            let errorMessage = "Erro desconhecido ao conectar.";
+            
+            if (error.code === 'auth/unauthorized-domain') {
+                errorMessage = `DOMÍNIO NÃO AUTORIZADO (${window.location.hostname}). Adicione-o no Firebase Console > Authentication > Settings > Authorized Domains.`;
+            } else if (error.code === 'auth/api-key-not-valid-please-pass-a-valid-api-key') {
+                errorMessage = "Chave de API do Firebase inválida ou expirada.";
+            } else if (error.message) {
+                errorMessage = error.message;
+            }
+            alert(errorMessage);
+        }
+    };
+    checkLoginErrors();
+
+    // 3. Configurar listener do Firebase
     if (auth) {
       const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
         setCurrentUser(firebaseUser);
@@ -125,8 +146,9 @@ export default function App() {
   const handleGoogleLogin = async () => {
     try {
       await loginWithGoogle();
-    } catch (e) {
-      alert("Erro ao conectar com Google");
+      // O fluxo de redirecionamento vai recarregar a página, então nada aqui roda imediatamente.
+    } catch (e: any) {
+      alert("Erro ao iniciar login: " + e.message);
     }
   };
 

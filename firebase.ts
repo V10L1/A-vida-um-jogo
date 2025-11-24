@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
+import { getAuth, GoogleAuthProvider, signInWithRedirect, signOut, getRedirectResult } from "firebase/auth";
 import { getFirestore, doc, setDoc, getDoc } from "firebase/firestore";
 import { GameState, UserProfile } from "./types";
 
@@ -13,6 +13,13 @@ const firebaseConfig = {
   appId: process.env.FIREBASE_APP_ID
 };
 
+// Debug: Verificar se as chaves estão carregando (mas escondendo valores sensiveis)
+console.log("Firebase Config Status:", {
+    hasApiKey: !!firebaseConfig.apiKey,
+    authDomain: firebaseConfig.authDomain,
+    projectId: firebaseConfig.projectId
+});
+
 // Inicializa o Firebase apenas se as chaves existirem
 let app;
 let auth: any;
@@ -25,22 +32,37 @@ try {
     auth = getAuth(app);
     db = getFirestore(app);
     googleProvider = new GoogleAuthProvider();
+  } else {
+    console.warn("Chaves do Firebase não encontradas. Verifique o arquivo .env ou as variáveis da Vercel.");
   }
 } catch (error) {
-  console.error("Erro ao inicializar Firebase. Verifique as configurações.", error);
+  console.error("Erro crítico ao inicializar Firebase:", error);
 }
 
 // Funções de Autenticação
 export const loginWithGoogle = async () => {
-  if (!auth) throw new Error("Firebase não configurado.");
+  if (!auth) throw new Error("Firebase não configurado (Falta API Key).");
   try {
-    const result = await signInWithPopup(auth, googleProvider);
-    return result.user;
+    // Usar Redirect é melhor para mobile que Popup
+    await signInWithRedirect(auth, googleProvider);
+    // O código para aqui pois a página recarrega
   } catch (error) {
-    console.error("Erro no login:", error);
+    console.error("Erro ao iniciar login:", error);
     throw error;
   }
 };
+
+// Nova função para checar erros após o redirecionamento
+export const checkRedirectResult = async () => {
+    if (!auth) return null;
+    try {
+        const result = await getRedirectResult(auth);
+        return result?.user;
+    } catch (error: any) {
+        console.error("Erro detalhado do Login:", error);
+        throw error;
+    }
+}
 
 export const logoutUser = async () => {
   if (!auth) return;
