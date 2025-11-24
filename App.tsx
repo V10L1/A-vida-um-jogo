@@ -1,5 +1,3 @@
-
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember } from './types';
 import { getIcon } from './components/Icons';
@@ -871,10 +869,10 @@ export default function App() {
         let paceMultiplier = 1;
         let paceLabel = "Normal";
 
-        if (pace <= 5) {
+        if (pace <= 3.75) { // 3:45/km = 3.75 min/km
             paceMultiplier = 1.5; // Elite
             paceLabel = "Elite";
-        } else if (pace <= 6) {
+        } else if (pace <= 4.5) { // 4:30/km = 4.5 min/km
             paceMultiplier = 1.2; // Atleta
             paceLabel = "Rápido";
         }
@@ -896,7 +894,7 @@ export default function App() {
         const pointsEarned = Math.ceil(amount * paceMultiplier);
         newAttributes.VIG = (newAttributes.VIG || 0) + pointsEarned;
         
-        if (pace <= 6) {
+        if (pace <= 4.5) { // Se for atleta/elite (4:30 ou menos)
              newAttributes.AGI = (newAttributes.AGI || 0) + Math.ceil(pointsEarned * 0.7);
         } else {
              newAttributes.AGI = (newAttributes.AGI || 0) + Math.ceil(pointsEarned * 0.3);
@@ -1486,7 +1484,7 @@ export default function App() {
                      <div className="p-2 bg-slate-900 rounded-full text-blue-400">{getIcon("Wind")}</div>
                      <div className="text-sm text-slate-300">
                          Corra mais rápido para ganhar bônus!<br/>
-                         <span className="text-xs text-emerald-400">{'<'} 5:00/km (Elite)</span> • <span className="text-xs text-blue-400">{'<'} 6:00/km (Rápido)</span>
+                         <span className="text-xs text-emerald-400">{'<'} 3:45/km (Elite)</span> • <span className="text-xs text-blue-400">{'<'} 4:30/km (Rápido)</span>
                      </div>
                  </div>
 
