@@ -43,7 +43,8 @@ import {
   Timer,
   Play,
   Pause,
-  RotateCcw
+  RotateCcw,
+  Gauge
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -78,6 +79,7 @@ export const getIcon = (name: string, className?: string) => {
     case 'Users': return <Users {...props} />;
     case 'Star': return <Star {...props} />;
     case 'Car': return <Car {...props} />;
+    case 'Gauge': return <Gauge {...props} />;
 
     // UI Actions
     case 'Pencil': return <Pencil {...props} />;

@@ -41,12 +41,15 @@ export interface ActivityLog {
   amount: number;
   xpGained: number;
   timestamp: number;
-  // Detalhes opcionais para treinos complexos (Musculação)
+  // Detalhes opcionais para treinos complexos (Musculação e Corrida)
   details?: {
     exercise?: string;
     weight?: number;
     reps?: number;
     restTime?: number;
+    distance?: number; // km
+    duration?: string; // MM:SS
+    pace?: string; // MM:SS /km
   };
 }
 
@@ -126,7 +129,7 @@ export const RPG_CLASSES = [
 
 export const ATTRIBUTE_LABELS: Record<Attribute, string> = {
     STR: 'Força',
-    END: 'Resist. Muscular',
+    END: 'Resistência',
     VIG: 'Vigor',
     AGI: 'Agilidade',
     DEX: 'Destreza',
@@ -149,7 +152,8 @@ export const ACTIVITIES: ActivityType[] = [
   { id: 'abs', label: 'Abdominais', xpPerUnit: 2, unit: 'reps', icon: 'ArrowBigUp', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'STR' },
   { id: 'squat', label: 'Agachamentos', xpPerUnit: 3, unit: 'reps', icon: 'ArrowBigUp', category: 'fitness', primaryAttribute: 'STR', secondaryAttribute: 'END' },
   
-  { id: 'water', label: 'Hidratação', xpPerUnit: 10, unit: 'copos', icon: 'Droplets', category: 'health', primaryAttribute: 'VIG' },
+  // Hidratacao nao da pontos de atributo, apenas XP geral
+  { id: 'water', label: 'Hidratação', xpPerUnit: 10, unit: 'copos', icon: 'Droplets', category: 'health' },
 
   // --- Atividades Específicas / Classe ---
   { id: 'bike', label: 'Ciclismo', xpPerUnit: 20, unit: 'km', icon: 'Bike', category: 'fitness', primaryAttribute: 'VIG', secondaryAttribute: 'STR' },

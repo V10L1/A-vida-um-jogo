@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember } from './types';
 import { getIcon } from './components/Icons';
@@ -200,6 +201,10 @@ export default function App() {
   const [gymRestTime, setGymRestTime] = useState('02:00'); // Default 2 mins
   const [isResting, setIsResting] = useState(false);
   const [timerTimeLeft, setTimerTimeLeft] = useState(0);
+
+  // --- Run Activity State ---
+  const [runDistance, setRunDistance] = useState('');
+  const [runDuration, setRunDuration] = useState(''); // MM:SS
   
   // Sleep Inputs
   const [bedTime, setBedTime] = useState('22:00');
@@ -816,45 +821,87 @@ export default function App() {
         if (reps <= 0) return;
 
         amount = 1; // 1 série
-        
-        // XP baseado em Volume Load (Peso * Reps)
-        // Se for peso do corpo (0kg), considera como se fosse 10kg para não zerar
         const effectiveWeight = weight > 0 ? weight : 10;
-        // Fórmula de XP: Volume / 5. Ex: 30kg * 12reps = 360 vol / 5 = 72 XP.
         xpGained = Math.floor((effectiveWeight * reps) / 5) + 5; 
 
         details = {
             exercise: gymExercise || 'Exercício',
             weight: weight,
             reps: reps,
-            restTime: 0 // Será tratado pelo timer visual
+            restTime: 0
         };
 
-        // --- Distribuição de Atributos Baseada em Faixas de Repetição ---
-        // Pontos ganhos são proporcionais ao XP, mas escalados para não inflacionar os atributos demais
         const attributePoints = Math.ceil(xpGained / 5);
 
         if (reps <= 6) {
-            // Força Bruta (STR)
             newAttributes.STR = (newAttributes.STR || 0) + attributePoints;
             newAttributes.END = (newAttributes.END || 0) + Math.ceil(attributePoints * 0.5);
         } else if (reps >= 7 && reps <= 9) {
-            // Híbrido (70% cada)
             newAttributes.STR = (newAttributes.STR || 0) + Math.ceil(attributePoints * 0.7);
             newAttributes.END = (newAttributes.END || 0) + Math.ceil(attributePoints * 0.7);
         } else {
-            // Resistência Muscular (END) - Reps >= 10
             newAttributes.END = (newAttributes.END || 0) + attributePoints;
             newAttributes.STR = (newAttributes.STR || 0) + Math.ceil(attributePoints * 0.5);
         }
 
-        // Iniciar timer
         const [mins, secs] = gymRestTime.split(':').map(Number);
         const totalSecs = (mins * 60) + secs;
         if (totalSecs > 0) {
             setTimerTimeLeft(totalSecs);
             setIsResting(true);
         }
+    } else if (selectedActivity.id === 'run') {
+        // --- Lógica Especial para Corrida (Pace) ---
+        const distance = Number(runDistance) || 0;
+        if (distance <= 0) return;
+        
+        // Parse duration from MM:SS
+        const [minsStr, secsStr] = runDuration.split(':');
+        const totalMinutes = (Number(minsStr) || 0) + ((Number(secsStr) || 0) / 60);
+        
+        if (totalMinutes <= 0) return;
+
+        amount = distance;
+        const pace = totalMinutes / distance; // Minutos por Km
+        
+        // XP Base
+        let baseXp = Math.floor(distance * selectedActivity.xpPerUnit);
+        
+        // Multiplicador de Pace
+        let paceMultiplier = 1;
+        let paceLabel = "Normal";
+
+        if (pace <= 5) {
+            paceMultiplier = 1.5; // Elite
+            paceLabel = "Elite";
+        } else if (pace <= 6) {
+            paceMultiplier = 1.2; // Atleta
+            paceLabel = "Rápido";
+        }
+
+        xpGained = Math.floor(baseXp * paceMultiplier);
+
+        // Format pace string for display (MM:SS)
+        const paceMins = Math.floor(pace);
+        const paceSecs = Math.round((pace - paceMins) * 60);
+        const paceString = `${paceMins}:${paceSecs.toString().padStart(2, '0')}`;
+
+        details = {
+            distance: distance,
+            duration: runDuration,
+            pace: `${paceString} /km`
+        };
+
+        // Atributos (Corrida foca em VIG e AGI se for rápido)
+        const pointsEarned = Math.ceil(amount * paceMultiplier);
+        newAttributes.VIG = (newAttributes.VIG || 0) + pointsEarned;
+        
+        if (pace <= 6) {
+             newAttributes.AGI = (newAttributes.AGI || 0) + Math.ceil(pointsEarned * 0.7);
+        } else {
+             newAttributes.AGI = (newAttributes.AGI || 0) + Math.ceil(pointsEarned * 0.3);
+        }
+
     } else {
         // Lógica Padrão para outras atividades
         if (!inputAmount || isNaN(Number(inputAmount))) return;
@@ -936,6 +983,8 @@ export default function App() {
     if (selectedActivity.id !== 'gym') {
         setIsActivityModalOpen(false);
         setInputAmount('');
+        setRunDistance('');
+        setRunDuration('');
         setSelectedActivity(null);
     }
     
@@ -1102,6 +1151,19 @@ export default function App() {
   const dailyQuests = gameState.quests.filter(q => q.type === 'daily');
   const weeklyQuests = gameState.quests.filter(q => q.type === 'weekly');
   const unclaimedQuestsCount = gameState.quests.filter(q => q.currentAmount >= q.targetAmount && !q.isClaimed).length;
+
+  // --- Run Pace Calculator ---
+  const currentPace = useMemo(() => {
+      if (!runDistance || !runDuration) return "0:00";
+      const d = Number(runDistance);
+      const [m, s] = runDuration.split(':').map(Number);
+      const totalMin = (m || 0) + ((s || 0) / 60);
+      if (d <= 0 || totalMin <= 0) return "0:00";
+      const p = totalMin / d;
+      const pM = Math.floor(p);
+      const pS = Math.round((p - pM) * 60);
+      return `${pM}:${pS.toString().padStart(2, '0')}`;
+  }, [runDistance, runDuration]);
 
   if (!user) {
     return (
@@ -1343,8 +1405,10 @@ export default function App() {
                       <div className="p-2 bg-slate-900 rounded-full text-slate-400">{getIcon(activity?.icon || 'Activity', 'w-4 h-4')}</div>
                       <div>
                         <div className="font-medium text-sm">{activity?.label}</div>
-                        {log.details ? (
+                        {log.details?.exercise ? (
                              <div className="text-xs text-blue-300">{log.details.exercise} • {log.details.weight}kg x {log.details.reps}</div>
+                        ) : log.details?.pace ? (
+                             <div className="text-xs text-emerald-300">{log.details.distance}km • {log.details.duration} • Pace {log.details.pace}</div>
                         ) : (
                              <div className="text-xs text-slate-400/70">{new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} • {log.amount} {activity?.unit}</div>
                         )}
@@ -1413,6 +1477,47 @@ export default function App() {
 
                  <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 mt-4">
                      {getIcon("CheckCircle", "w-5 h-5")} Concluir Série
+                 </button>
+             </div>
+        ) : selectedActivity?.id === 'run' ? (
+             // --- RUN INPUT FORM ---
+             <div className="space-y-4">
+                 <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex items-center gap-3 mb-4">
+                     <div className="p-2 bg-slate-900 rounded-full text-blue-400">{getIcon("Wind")}</div>
+                     <div className="text-sm text-slate-300">
+                         Corra mais rápido para ganhar bônus!<br/>
+                         <span className="text-xs text-emerald-400">{'<'} 5:00/km (Elite)</span> • <span className="text-xs text-blue-400">{'<'} 6:00/km (Rápido)</span>
+                     </div>
+                 </div>
+
+                 <div className="grid grid-cols-2 gap-4">
+                     <div>
+                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Distância (km)</label>
+                         <input type="number" value={runDistance} onChange={(e) => setRunDistance(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" autoFocus />
+                     </div>
+                     <div>
+                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Tempo (MM:SS)</label>
+                         <input type="text" value={runDuration} onChange={(e) => {
+                             // Simple mask for MM:SS
+                             let v = e.target.value.replace(/[^0-9:]/g, '');
+                             if (v.length === 2 && !v.includes(':') && e.target.value.length > runDuration.length) v += ':';
+                             setRunDuration(v);
+                         }} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="00:00" maxLength={5} />
+                     </div>
+                 </div>
+
+                 {/* Pace Display */}
+                 <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 flex items-center justify-between">
+                     <div className="flex items-center gap-2 text-slate-400 text-sm">
+                         {getIcon("Gauge", "w-4 h-4")} Pace Estimado
+                     </div>
+                     <div className="text-xl font-bold text-white font-mono">
+                         {currentPace} <span className="text-xs text-slate-500 font-sans">/km</span>
+                     </div>
+                 </div>
+
+                 <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 mt-4">
+                     {getIcon("CheckCircle", "w-5 h-5")} Registrar Corrida
                  </button>
              </div>
         ) : (
