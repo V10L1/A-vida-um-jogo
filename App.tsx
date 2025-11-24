@@ -372,6 +372,7 @@ export default function App() {
         if (act.unit === 'ação') dailyBase = 1;
         if (act.id === 'drive') dailyBase = 20;
         if (act.id === 'gym') dailyBase = 3; // 3 series por dia
+        if (act.id === 'sleep') dailyBase = 1; // 1 registro de sono
 
         if (type === 'weekly') return dailyBase * 7;
         return dailyBase;
@@ -1116,6 +1117,8 @@ export default function App() {
 
     setGameState(prev => ({
         ...prev,
+        // Atualiza a missão de sono se ela existir
+        quests: prev.quests.map(q => q.activityId === 'sleep' && !q.isClaimed ? { ...q, currentAmount: q.currentAmount + 1 } : q),
         activeBuff: {
             multiplier: Number(multiplier.toFixed(2)),
             expiresAt: expireDate.getTime(),
@@ -1188,7 +1191,20 @@ export default function App() {
   const buffPercentage = isBuffActive ? Math.round((gameState.activeBuff!.multiplier - 1) * 100) : 0;
   const xpNeeded = calculateXpForNextLevel(gameState.level);
 
+  // Filtragem e Ordenação de Quests
   const dailyQuests = gameState.quests.filter(q => q.type === 'daily');
+  
+  // Separar Quests Básicas (Sem atributo ou Sono) de Avançadas
+  const basicDailyQuests = dailyQuests.filter(q => {
+      const act = ACTIVITIES.find(a => a.id === q.activityId);
+      return q.activityId === 'sleep' || (act && !act.primaryAttribute);
+  });
+  
+  const advancedDailyQuests = dailyQuests.filter(q => {
+      const act = ACTIVITIES.find(a => a.id === q.activityId);
+      return q.activityId !== 'sleep' && (act && act.primaryAttribute);
+  });
+
   const weeklyQuests = gameState.quests.filter(q => q.type === 'weekly');
   const unclaimedQuestsCount = gameState.quests.filter(q => q.currentAmount >= q.targetAmount && !q.isClaimed).length;
 
@@ -1679,31 +1695,71 @@ export default function App() {
              {/* Daily Section */}
              <div>
                 <h4 className="text-amber-400 font-bold uppercase text-xs tracking-widest mb-2 flex items-center gap-2">{getIcon("Scroll", "w-4 h-4")} Diárias</h4>
-                <div className="space-y-3">
-                    {dailyQuests.map(quest => {
-                         const act = ACTIVITIES.find(a => a.id === quest.activityId);
-                         const isComplete = quest.currentAmount >= quest.targetAmount;
-                         return (
-                            <div key={quest.id} className={`p-3 rounded-lg border flex flex-col gap-2 ${isComplete ? 'bg-emerald-900/20 border-emerald-700' : 'bg-slate-800 border-slate-700'}`}>
-                                <div className="flex justify-between items-center">
-                                    <span className="text-sm font-semibold text-slate-200">{act?.label}</span>
-                                    <span className="text-xs text-amber-400 font-bold">+{quest.xpReward} XP</span>
-                                </div>
-                                <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
-                                    <div className="bg-amber-500 h-full transition-all" style={{ width: `${Math.min(100, (quest.currentAmount / quest.targetAmount) * 100)}%` }}></div>
-                                </div>
-                                <div className="flex justify-between items-center text-xs text-slate-400">
-                                    <span>{quest.currentAmount} / {quest.targetAmount} {act?.unit}</span>
-                                    {isComplete && !quest.isClaimed && (
-                                        <button onClick={() => handleClaimQuest(quest.id)} className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded animate-pulse">
-                                            Resgatar
-                                        </button>
-                                    )}
-                                    {quest.isClaimed && <span className="text-emerald-500 font-bold flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Completo</span>}
-                                </div>
-                            </div>
-                         );
-                    })}
+                <div className="space-y-4">
+                    {/* Missões Básicas (Sem Atributos / Sono) */}
+                    {basicDailyQuests.length > 0 && (
+                        <div className="space-y-2">
+                            <h5 className="text-[10px] text-slate-500 uppercase font-bold pl-1">Missões Básicas</h5>
+                            {basicDailyQuests.map(quest => {
+                                const act = ACTIVITIES.find(a => a.id === quest.activityId);
+                                const isComplete = quest.currentAmount >= quest.targetAmount;
+                                const label = quest.activityId === 'sleep' ? 'Registrar Sono' : act?.label;
+                                const unit = quest.activityId === 'sleep' ? 'noite' : act?.unit;
+
+                                return (
+                                    <div key={quest.id} className={`p-3 rounded-lg border flex flex-col gap-2 ${isComplete ? 'bg-emerald-900/20 border-emerald-700' : 'bg-slate-800 border-slate-700'}`}>
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-sm font-semibold text-slate-200">{label}</span>
+                                            <span className="text-xs text-amber-400 font-bold">+{quest.xpReward} XP</span>
+                                        </div>
+                                        <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
+                                            <div className="bg-amber-500 h-full transition-all" style={{ width: `${Math.min(100, (quest.currentAmount / quest.targetAmount) * 100)}%` }}></div>
+                                        </div>
+                                        <div className="flex justify-between items-center text-xs text-slate-400">
+                                            <span>{quest.currentAmount} / {quest.targetAmount} {unit}</span>
+                                            {isComplete && !quest.isClaimed && (
+                                                <button onClick={() => handleClaimQuest(quest.id)} className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded animate-pulse">
+                                                    Resgatar
+                                                </button>
+                                            )}
+                                            {quest.isClaimed && <span className="text-emerald-500 font-bold flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Completo</span>}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                    
+                    {/* Missões Avançadas (Com Atributos) */}
+                    {advancedDailyQuests.length > 0 && (
+                        <div className="space-y-2">
+                             <h5 className="text-[10px] text-slate-500 uppercase font-bold pl-1">Treino / Classe</h5>
+                             {advancedDailyQuests.map(quest => {
+                                 const act = ACTIVITIES.find(a => a.id === quest.activityId);
+                                 const isComplete = quest.currentAmount >= quest.targetAmount;
+                                 return (
+                                    <div key={quest.id} className={`p-3 rounded-lg border flex flex-col gap-2 ${isComplete ? 'bg-emerald-900/20 border-emerald-700' : 'bg-slate-800 border-slate-700'}`}>
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-sm font-semibold text-slate-200">{act?.label}</span>
+                                            <span className="text-xs text-amber-400 font-bold">+{quest.xpReward} XP</span>
+                                        </div>
+                                        <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
+                                            <div className="bg-amber-500 h-full transition-all" style={{ width: `${Math.min(100, (quest.currentAmount / quest.targetAmount) * 100)}%` }}></div>
+                                        </div>
+                                        <div className="flex justify-between items-center text-xs text-slate-400">
+                                            <span>{quest.currentAmount} / {quest.targetAmount} {act?.unit}</span>
+                                            {isComplete && !quest.isClaimed && (
+                                                <button onClick={() => handleClaimQuest(quest.id)} className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded animate-pulse">
+                                                    Resgatar
+                                                </button>
+                                            )}
+                                            {quest.isClaimed && <span className="text-emerald-500 font-bold flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Completo</span>}
+                                        </div>
+                                    </div>
+                                 );
+                             })}
+                        </div>
+                    )}
                 </div>
              </div>
              
@@ -1714,17 +1770,20 @@ export default function App() {
                     {weeklyQuests.map(quest => {
                          const act = ACTIVITIES.find(a => a.id === quest.activityId);
                          const isComplete = quest.currentAmount >= quest.targetAmount;
+                         const label = quest.activityId === 'sleep' ? 'Registrar Sono' : act?.label;
+                         const unit = quest.activityId === 'sleep' ? 'noite' : act?.unit;
+
                          return (
                             <div key={quest.id} className={`p-3 rounded-lg border flex flex-col gap-2 ${isComplete ? 'bg-emerald-900/20 border-emerald-700' : 'bg-slate-800 border-slate-700'}`}>
                                 <div className="flex justify-between items-center">
-                                    <span className="text-sm font-semibold text-slate-200">{act?.label}</span>
+                                    <span className="text-sm font-semibold text-slate-200">{label}</span>
                                     <span className="text-xs text-purple-400 font-bold">+{quest.xpReward} XP</span>
                                 </div>
                                 <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
                                     <div className="bg-purple-500 h-full transition-all" style={{ width: `${Math.min(100, (quest.currentAmount / quest.targetAmount) * 100)}%` }}></div>
                                 </div>
                                 <div className="flex justify-between items-center text-xs text-slate-400">
-                                    <span>{quest.currentAmount} / {quest.targetAmount} {act?.unit}</span>
+                                    <span>{quest.currentAmount} / {quest.targetAmount} {unit}</span>
                                     {isComplete && !quest.isClaimed && (
                                         <button onClick={() => handleClaimQuest(quest.id)} className="px-3 py-1 bg-purple-500 hover:bg-purple-400 text-white font-bold rounded animate-pulse">
                                             Resgatar

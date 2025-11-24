@@ -139,7 +139,8 @@ export const ATTRIBUTE_LABELS: Record<Attribute, string> = {
 };
 
 // IDs das atividades básicas para lógica de Quests
-export const BASIC_ACTIVITY_IDS = ['walk', 'run', 'pushup', 'abs', 'water'];
+// Adicionado 'sleep' para ser gerada nas básicas
+export const BASIC_ACTIVITY_IDS = ['walk', 'run', 'pushup', 'abs', 'water', 'sleep'];
 
 export const ACTIVITIES: ActivityType[] = [
   // --- Atividades Básicas (Missões Diárias Padrão) ---
@@ -152,8 +153,9 @@ export const ACTIVITIES: ActivityType[] = [
   { id: 'abs', label: 'Abdominais', xpPerUnit: 2, unit: 'reps', icon: 'ArrowBigUp', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'STR' },
   { id: 'squat', label: 'Agachamentos', xpPerUnit: 3, unit: 'reps', icon: 'ArrowBigUp', category: 'fitness', primaryAttribute: 'STR', secondaryAttribute: 'END' },
   
-  // Hidratacao nao da pontos de atributo, apenas XP geral
+  // Hidratacao e Sono nao dão pontos de atributo, apenas XP geral e Buffs
   { id: 'water', label: 'Hidratação', xpPerUnit: 10, unit: 'copos (250ml)', icon: 'Droplets', category: 'health' },
+  { id: 'sleep', label: 'Registrar Sono', xpPerUnit: 50, unit: 'noite', icon: 'Moon', category: 'health' },
 
   // --- Atividades Específicas / Classe ---
   { id: 'bike', label: 'Ciclismo', xpPerUnit: 20, unit: 'km', icon: 'Bike', category: 'fitness', primaryAttribute: 'VIG', secondaryAttribute: 'STR' },
