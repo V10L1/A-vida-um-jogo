@@ -162,7 +162,7 @@ const ACTIVITY_CATEGORIES = [
     id: 'social', 
     label: 'Bom-feitor', 
     types: ['social'], 
-    color: 'text-emerald-400',
+    color: 'text-emerald-400', 
     icon: 'Heart'
   }
 ];
@@ -230,12 +230,41 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [guildTab, setGuildTab] = useState<'info' | 'chat' | 'raid'>('info');
 
+  // History UI State
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const timerIntervalRef = useRef<number | null>(null);
 
   // Constants
   const XP_FOR_NEXT_LEVEL_BASE = 100;
+
+  // --- Computed Memos ---
+
+  // Generate unique exercise names for autocomplete
+  const uniqueExercises = useMemo(() => {
+    const exercises = new Set<string>();
+    gameState.logs.forEach(log => {
+        if (log.activityId === 'gym' && log.details?.exercise) {
+            exercises.add(log.details.exercise);
+        }
+    });
+    return Array.from(exercises).sort();
+  }, [gameState.logs]);
+
+  // Group logs by Activity ID for collapsible history
+  const historyGroups = useMemo(() => {
+    const groups: Record<string, ActivityLog[]> = {};
+    gameState.logs.forEach(log => {
+        if (!groups[log.activityId]) groups[log.activityId] = [];
+        groups[log.activityId].push(log);
+    });
+    // Sort groups based on the timestamp of the LATEST log in that group
+    return Object.entries(groups).sort(([, aLogs], [, bLogs]) => {
+        return bLogs[0].timestamp - aLogs[0].timestamp; // Descending
+    });
+  }, [gameState.logs]);
 
   // --- Connectivity Listeners ---
   useEffect(() => {
@@ -1391,33 +1420,78 @@ export default function App() {
 
         <div>
           <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">Histórico</h2>
-          <div className="space-y-2">
+          <div className="space-y-3">
             {gameState.logs.length === 0 ? (
               <div className="text-center py-8 text-slate-500/50 text-sm italic">Nenhuma atividade registrada hoje.</div>
             ) : (
-              gameState.logs.map((log) => {
-                const activity = ACTIVITIES.find(a => a.id === log.activityId);
-                return (
-                  <div key={log.id} className="bg-slate-800/40 border border-slate-700 rounded-lg p-3 flex items-center justify-between hover:bg-slate-800/80 transition-colors">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-slate-900 rounded-full text-slate-400">{getIcon(activity?.icon || 'Activity', 'w-4 h-4')}</div>
-                      <div>
-                        <div className="font-medium text-sm">{activity?.label}</div>
-                        {log.details?.exercise ? (
-                             <div className="text-xs text-blue-300">{log.details.exercise} • {log.details.weight}kg x {log.details.reps}</div>
-                        ) : log.details?.pace ? (
-                             <div className="text-xs text-emerald-300">{log.details.distance}km • {log.details.duration} • Pace {log.details.pace}</div>
-                        ) : (
-                             <div className="text-xs text-slate-400/70">{new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} • {log.amount} {activity?.unit}</div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                        <div className="text-blue-400 font-bold text-sm">+{log.xpGained} XP</div>
-                    </div>
-                  </div>
-                );
-              })
+                historyGroups.map(([actId, logs]) => {
+                    const latestLog = logs[0];
+                    const activity = ACTIVITIES.find(a => a.id === actId);
+                    const isExpanded = expandedHistoryId === actId;
+
+                    return (
+                        <div key={actId} className="bg-slate-800/40 border border-slate-700 rounded-lg overflow-hidden transition-all">
+                            {/* Header (Last Activity) */}
+                            <div 
+                                onClick={() => setExpandedHistoryId(isExpanded ? null : actId)}
+                                className="p-3 flex items-center justify-between hover:bg-slate-800/80 transition-colors cursor-pointer"
+                            >
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-slate-900 rounded-full text-slate-400 relative">
+                                        {getIcon(activity?.icon || 'Activity', 'w-4 h-4')}
+                                        <span className="absolute -top-1 -right-1 bg-slate-700 text-[8px] text-white px-1 rounded-full border border-slate-900">
+                                            {logs.length}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <div className="font-medium text-sm flex items-center gap-2">
+                                            {activity?.label}
+                                            <span className="text-[10px] text-slate-500 font-normal">
+                                                {new Date(latestLog.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                            </span>
+                                        </div>
+                                        {latestLog.details?.exercise ? (
+                                            <div className="text-xs text-blue-300">{latestLog.details.exercise} • {latestLog.details.weight}kg x {latestLog.details.reps}</div>
+                                        ) : latestLog.details?.pace ? (
+                                            <div className="text-xs text-emerald-300">{latestLog.details.distance}km • {latestLog.details.duration}</div>
+                                        ) : (
+                                            <div className="text-xs text-slate-400/70">
+                                                {latestLog.amount} {activity?.unit}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <div className="text-blue-400 font-bold text-sm">+{latestLog.xpGained} XP</div>
+                                    <div className={`transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`}>
+                                        {getIcon("ChevronRight", "w-4 h-4 text-slate-500")}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Expanded History */}
+                            {isExpanded && logs.length > 1 && (
+                                <div className="bg-slate-900/30 border-t border-slate-700/50 p-2 space-y-1 animate-fade-in">
+                                    {logs.slice(1).map(log => (
+                                        <div key={log.id} className="flex justify-between items-center p-2 rounded hover:bg-slate-800/50 text-xs text-slate-400">
+                                            <div>
+                                                 <span className="inline-block w-12 text-slate-500">{new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                                 {log.details?.exercise ? (
+                                                     <span>{log.details.exercise} ({log.details.weight}kg x {log.details.reps})</span>
+                                                 ) : log.details?.pace ? (
+                                                     <span>{log.details.distance}km ({log.details.duration})</span>
+                                                 ) : (
+                                                     <span>{log.amount} {activity?.unit}</span>
+                                                 )}
+                                            </div>
+                                            <span className="text-blue-500/70">+{log.xpGained}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })
             )}
           </div>
         </div>
@@ -1454,7 +1528,21 @@ export default function App() {
                  
                  <div>
                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Exercício</label>
-                     <input type="text" value={gymExercise} onChange={(e) => setGymExercise(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Supino Reto" autoFocus />
+                     <input 
+                        type="text" 
+                        value={gymExercise} 
+                        onChange={(e) => setGymExercise(e.target.value)} 
+                        list="exercise-suggestions"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" 
+                        placeholder="Ex: Supino Reto" 
+                        autoFocus 
+                     />
+                     {/* Autocomplete Datalist */}
+                     <datalist id="exercise-suggestions">
+                         {uniqueExercises.map((ex, index) => (
+                             <option key={index} value={ex} />
+                         ))}
+                     </datalist>
                  </div>
 
                  <div className="grid grid-cols-2 gap-4">
