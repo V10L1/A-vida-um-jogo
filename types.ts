@@ -1,3 +1,4 @@
+
 export type Gender = 'Masculino' | 'Feminino' | 'Outros';
 
 export interface UserProfile {
@@ -10,6 +11,9 @@ export interface UserProfile {
   avatarImage?: string; // Base64 string da imagem customizada
 }
 
+// Novos Atributos de RPG
+export type Attribute = 'STR' | 'END' | 'AGI' | 'DEX' | 'INT' | 'CHA';
+
 export interface ActivityType {
   id: string;
   label: string;
@@ -17,7 +21,9 @@ export interface ActivityType {
   unit: string;
   icon: string;
   category: 'fitness' | 'intellect' | 'health' | 'combat' | 'social';
-  relatedClass?: string; // Classe que ganha pontos com isso. Se undefined, é atividade básica.
+  // Agora a atividade dá pontos para atributos especificos
+  primaryAttribute?: Attribute;
+  secondaryAttribute?: Attribute;
 }
 
 export interface ActivityLog {
@@ -40,40 +46,47 @@ export interface GameState {
   totalXp: number;
   logs: ActivityLog[];
   classTitle: string; 
-  classPoints: Record<string, number>; // Pontos acumulados por classe
+  attributes: Record<Attribute, number>; // Pontos de Atributo (Força, Agilidade, etc)
   activeBuff?: XpBuff | null;
 }
 
-// Lista de Classes Oficiais para o Gráfico
+// Lista de Classes para Display (Lógica é calculada dinamicamente)
 export const RPG_CLASSES = [
   'Corredor', 'Biker', 'Lutador', 'Tanque', 
   'Berseker', 'Bodybuilder', 'Espadachim', 'Healer', 
-  'Atirador', 'Pistoleiro', 'Conselheiro', 'Mago'
+  'Atirador', 'Pistoleiro', 'Conselheiro', 'Mago', 'NPC'
 ];
 
+export const ATTRIBUTE_LABELS: Record<Attribute, string> = {
+    STR: 'Força',
+    END: 'Resistência',
+    AGI: 'Agilidade',
+    DEX: 'Destreza',
+    INT: 'Intelecto',
+    CHA: 'Carisma'
+};
+
 export const ACTIVITIES: ActivityType[] = [
-  // --- Atividades Básicas (Sem Classe) ---
-  { id: 'walk', label: 'Caminhada Leve', xpPerUnit: 15, unit: 'km', icon: 'Footprints', category: 'fitness' },
-  { id: 'pushup', label: 'Flexões Diárias', xpPerUnit: 2, unit: 'reps', icon: 'Dumbbell', category: 'fitness' },
-  { id: 'water', label: 'Hidratação', xpPerUnit: 10, unit: 'copos', icon: 'Droplets', category: 'health' },
+  // --- Atividades Básicas (Dão pouco atributo, foco em XP geral) ---
+  { id: 'walk', label: 'Caminhada Leve', xpPerUnit: 15, unit: 'km', icon: 'Footprints', category: 'fitness', primaryAttribute: 'END' },
+  { id: 'pushup', label: 'Flexões Diárias', xpPerUnit: 2, unit: 'reps', icon: 'Dumbbell', category: 'fitness', primaryAttribute: 'STR' },
+  { id: 'water', label: 'Hidratação', xpPerUnit: 10, unit: 'copos', icon: 'Droplets', category: 'health', primaryAttribute: 'END' },
 
-  // --- Atividades Principais / Classes ---
-  
-  // Fitness / Força
-  { id: 'run', label: 'Corrida', xpPerUnit: 30, unit: 'km', icon: 'Wind', category: 'fitness', relatedClass: 'Corredor' },
-  { id: 'bike', label: 'Ciclismo', xpPerUnit: 20, unit: 'km', icon: 'Bike', category: 'fitness', relatedClass: 'Biker' },
-  { id: 'gym', label: 'Musculação / Peso', xpPerUnit: 50, unit: 'treino', icon: 'Biceps', category: 'fitness', relatedClass: 'Bodybuilder' },
-  { id: 'hiit', label: 'HIIT / Cardio Intenso', xpPerUnit: 8, unit: 'min', icon: 'Flame', category: 'fitness', relatedClass: 'Berseker' },
-  { id: 'resistence', label: 'Treino de Resistência', xpPerUnit: 5, unit: 'min', icon: 'Shield', category: 'fitness', relatedClass: 'Tanque' },
+  // --- Atividades Principais (Físico) ---
+  { id: 'run', label: 'Corrida', xpPerUnit: 30, unit: 'km', icon: 'Wind', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'AGI' },
+  { id: 'bike', label: 'Ciclismo', xpPerUnit: 20, unit: 'km', icon: 'Bike', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'STR' },
+  { id: 'gym', label: 'Musculação / Peso', xpPerUnit: 50, unit: 'treino', icon: 'Biceps', category: 'fitness', primaryAttribute: 'STR' },
+  { id: 'hiit', label: 'HIIT / Cardio Intenso', xpPerUnit: 8, unit: 'min', icon: 'Flame', category: 'fitness', primaryAttribute: 'AGI', secondaryAttribute: 'END' },
+  { id: 'resistence', label: 'Treino de Resistência', xpPerUnit: 5, unit: 'min', icon: 'Shield', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'STR' },
 
-  // Combate / Destreza
-  { id: 'fight', label: 'Treino de Luta/Boxe', xpPerUnit: 10, unit: 'min', icon: 'Swords', category: 'combat', relatedClass: 'Lutador' },
-  { id: 'sword', label: 'Esgrima / Bastão', xpPerUnit: 10, unit: 'min', icon: 'Sword', category: 'combat', relatedClass: 'Espadachim' },
-  { id: 'archery', label: 'Arco e Flecha', xpPerUnit: 40, unit: 'sessão', icon: 'Crosshair', category: 'combat', relatedClass: 'Atirador' },
-  { id: 'shooting', label: 'Treino de Mira / Tiro', xpPerUnit: 20, unit: 'sessão', icon: 'Target', category: 'combat', relatedClass: 'Pistoleiro' },
+  // --- Combate ---
+  { id: 'fight', label: 'Treino de Luta/Boxe', xpPerUnit: 10, unit: 'min', icon: 'Swords', category: 'combat', primaryAttribute: 'STR', secondaryAttribute: 'DEX' },
+  { id: 'sword', label: 'Esgrima / Bastão', xpPerUnit: 10, unit: 'min', icon: 'Sword', category: 'combat', primaryAttribute: 'DEX', secondaryAttribute: 'AGI' },
+  { id: 'archery', label: 'Arco e Flecha', xpPerUnit: 40, unit: 'sessão', icon: 'Crosshair', category: 'combat', primaryAttribute: 'DEX' },
+  { id: 'shooting', label: 'Treino de Mira / Tiro', xpPerUnit: 20, unit: 'sessão', icon: 'Target', category: 'combat', primaryAttribute: 'DEX', secondaryAttribute: 'INT' },
 
-  // Intelecto / Social / Suporte
-  { id: 'study', label: 'Estudo / Leitura', xpPerUnit: 5, unit: 'pág/min', icon: 'BookOpen', category: 'intellect', relatedClass: 'Mago' },
-  { id: 'volunteer', label: 'Boa Ação / Ajuda', xpPerUnit: 150, unit: 'ação', icon: 'Heart', category: 'social', relatedClass: 'Healer' },
-  { id: 'listen', label: 'Ouvir / Aconselhar', xpPerUnit: 10, unit: 'min', icon: 'Brain', category: 'social', relatedClass: 'Conselheiro' },
+  // --- Intelectual / Social ---
+  { id: 'study', label: 'Estudo / Leitura', xpPerUnit: 5, unit: 'pág/min', icon: 'BookOpen', category: 'intellect', primaryAttribute: 'INT' },
+  { id: 'volunteer', label: 'Boa Ação / Ajuda', xpPerUnit: 150, unit: 'ação', icon: 'Heart', category: 'social', primaryAttribute: 'CHA', secondaryAttribute: 'INT' },
+  { id: 'listen', label: 'Ouvir / Aconselhar', xpPerUnit: 10, unit: 'min', icon: 'Brain', category: 'social', primaryAttribute: 'CHA' },
 ];

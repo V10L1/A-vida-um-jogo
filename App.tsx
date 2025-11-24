@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, RPG_CLASSES } from './types';
+import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS } from './types';
 import { getIcon } from './components/Icons';
 import { generateRpgFlavorText } from './services/geminiService';
 import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult } from './firebase';
@@ -38,19 +38,22 @@ const Modal = ({ isOpen, onClose, title, children, large = false }: { isOpen: bo
   );
 };
 
-// --- Radar Chart Component ---
-const RadarChart = ({ classPoints }: { classPoints: Record<string, number> }) => {
+// --- Radar Chart Component (Agora exibe Atributos) ---
+const RadarChart = ({ attributes }: { attributes: Record<Attribute, number> }) => {
   const size = 300;
   const center = size / 2;
   const radius = (size / 2) - 40; // Padding
-  const classes = RPG_CLASSES;
   
-  // Encontrar o valor máximo para normalizar o gráfico (mínimo de 10 para não ficar zerado)
-  const maxVal = Math.max(10, ...Object.values(classPoints));
+  // Ordem fixa para o gráfico ficar bonito
+  const attributeKeys: Attribute[] = ['STR', 'AGI', 'DEX', 'INT', 'CHA', 'END'];
+  
+  // Encontrar o valor máximo para normalizar o gráfico (mínimo de 10)
+  const values = attributeKeys.map(k => attributes[k] || 0);
+  const maxVal = Math.max(20, ...values); // Minimo 20 para visual
 
   // Helper para calcular coordenadas
   const getCoordinates = (index: number, value: number) => {
-    const angle = (Math.PI * 2 * index) / classes.length - Math.PI / 2;
+    const angle = (Math.PI * 2 * index) / attributeKeys.length - Math.PI / 2;
     const r = (value / maxVal) * radius;
     const x = center + r * Math.cos(angle);
     const y = center + r * Math.sin(angle);
@@ -58,14 +61,14 @@ const RadarChart = ({ classPoints }: { classPoints: Record<string, number> }) =>
   };
 
   // Gerar o caminho do polígono (seus pontos)
-  const points = classes.map((cls, i) => {
-    const val = classPoints[cls] || 0;
+  const points = attributeKeys.map((key, i) => {
+    const val = attributes[key] || 0;
     const { x, y } = getCoordinates(i, val);
     return `${x},${y}`;
   }).join(" ");
 
-  // Gerar o polígono de fundo (limite máximo)
-  const backgroundPoints = classes.map((_, i) => {
+  // Gerar o polígono de fundo
+  const backgroundPoints = attributeKeys.map((_, i) => {
     const { x, y } = getCoordinates(i, maxVal);
     return `${x},${y}`;
   }).join(" ");
@@ -78,7 +81,7 @@ const RadarChart = ({ classPoints }: { classPoints: Record<string, number> }) =>
         {[0.25, 0.5, 0.75].map((scale) => (
              <polygon 
                 key={scale}
-                points={classes.map((_, i) => {
+                points={attributeKeys.map((_, i) => {
                     const { x, y } = getCoordinates(i, maxVal * scale);
                     return `${x},${y}`;
                 }).join(" ")}
@@ -90,30 +93,41 @@ const RadarChart = ({ classPoints }: { classPoints: Record<string, number> }) =>
         ))}
 
         {/* Dados do Jogador */}
-        <polygon points={points} fill="rgba(59, 130, 246, 0.4)" stroke="#3b82f6" strokeWidth="2" />
+        <polygon points={points} fill="rgba(16, 185, 129, 0.4)" stroke="#10b981" strokeWidth="2" />
         
         {/* Círculos nos vértices */}
-        {classes.map((cls, i) => {
-            const val = classPoints[cls] || 0;
+        {attributeKeys.map((key, i) => {
+            const val = attributes[key] || 0;
             const { x, y } = getCoordinates(i, val);
-            return <circle key={i} cx={x} cy={y} r="3" fill="#60a5fa" />;
+            return <circle key={i} cx={x} cy={y} r="3" fill="#34d399" />;
         })}
 
         {/* Labels */}
-        {classes.map((cls, i) => {
-          const { x, y } = getCoordinates(i, maxVal + (maxVal * 0.15)); // Um pouco pra fora do raio
+        {attributeKeys.map((key, i) => {
+          const { x, y } = getCoordinates(i, maxVal + (maxVal * 0.18)); 
+          const val = attributes[key] || 0;
           return (
-            <text 
-              key={i} 
-              x={x} 
-              y={y} 
-              textAnchor="middle" 
-              dominantBaseline="middle" 
-              className="text-[10px] fill-slate-400 font-bold uppercase"
-              style={{ fontSize: '9px' }}
-            >
-              {cls}
-            </text>
+            <g key={i}>
+                <text 
+                x={x} 
+                y={y - 5} 
+                textAnchor="middle" 
+                dominantBaseline="middle" 
+                className="text-[10px] fill-slate-300 font-bold uppercase"
+                style={{ fontSize: '10px' }}
+                >
+                {ATTRIBUTE_LABELS[key]}
+                </text>
+                <text 
+                x={x} 
+                y={y + 8} 
+                textAnchor="middle" 
+                dominantBaseline="middle" 
+                className="text-[9px] fill-emerald-400 font-bold"
+                >
+                {Math.floor(val)}
+                </text>
+            </g>
           );
         })}
       </svg>
@@ -164,13 +178,13 @@ export default function App() {
     totalXp: 0,
     logs: [],
     classTitle: "NPC",
-    classPoints: {}, 
+    attributes: { STR: 0, END: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0 }, 
     activeBuff: null
   });
   const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
   const [isSleepModalOpen, setIsSleepModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-  const [isEditingProfile, setIsEditingProfile] = useState(false); // Estado para edição de perfil
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
 
   const [selectedActivity, setSelectedActivity] = useState<ActivityType | null>(null);
   const [inputAmount, setInputAmount] = useState('');
@@ -190,7 +204,6 @@ export default function App() {
   // Constants
   const XP_FOR_NEXT_LEVEL_BASE = 100;
   
-  // File Input Ref
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Initialize & Auth Listener
@@ -201,11 +214,13 @@ export default function App() {
     if (savedUser) setUser(JSON.parse(savedUser));
     if (savedGame) {
         const parsedGame = JSON.parse(savedGame);
+        // Migração de dados antigos para novos atributos se necessario
+        const safeAttributes = parsedGame.attributes || { STR: 0, END: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0 };
         setGameState(prev => ({ 
             ...prev, 
             ...parsedGame,
             classTitle: parsedGame.classTitle || "NPC",
-            classPoints: parsedGame.classPoints || {} 
+            attributes: safeAttributes
         }));
     }
 
@@ -274,17 +289,66 @@ export default function App() {
     return level * XP_FOR_NEXT_LEVEL_BASE;
   };
 
-  const determineClass = (points: Record<string, number>): string => {
-      let maxPoints = 0;
-      let dominantClass = "NPC";
-      for (const [className, score] of Object.entries(points)) {
-          if (score > maxPoints) {
-              maxPoints = score;
-              dominantClass = className;
-          }
+  // --- LÓGICA DE CLASSES BASEADA EM ATRIBUTOS ---
+  const determineClass = (attrs: Record<Attribute, number>): string => {
+      // 1. Encontrar Atributo Dominante
+      let maxAttr: Attribute = 'STR';
+      let maxVal = -1;
+      
+      for (const key of Object.keys(attrs) as Attribute[]) {
+        if (attrs[key] > maxVal) {
+            maxVal = attrs[key];
+            maxAttr = key;
+        }
       }
-      if (maxPoints === 0) return "NPC";
-      return dominantClass;
+
+      if (maxVal < 10) return "NPC"; // Ainda não treinou o suficiente
+
+      // 2. Encontrar Secundário
+      let secondMaxAttr: Attribute | null = null;
+      let secondMaxVal = -1;
+      
+      for (const key of Object.keys(attrs) as Attribute[]) {
+        if (key !== maxAttr && attrs[key] > secondMaxVal) {
+            secondMaxVal = attrs[key];
+            secondMaxAttr = key;
+        }
+      }
+
+      // 3. Regras de Classes (Arquétipos)
+      const isSecondaryRelevant = secondMaxAttr && secondMaxVal > (maxVal * 0.4); // Secundário tem que ser pelo menos 40% do principal
+
+      switch (maxAttr) {
+          case 'STR': // Força Dominante
+              if (isSecondaryRelevant && secondMaxAttr === 'END') return "Tanque";
+              if (isSecondaryRelevant && secondMaxAttr === 'DEX') return "Lutador";
+              if (isSecondaryRelevant && secondMaxAttr === 'AGI') return "Berseker";
+              return "Bodybuilder";
+          
+          case 'END': // Resistência Dominante
+              if (isSecondaryRelevant && secondMaxAttr === 'STR') return "Biker"; 
+              if (isSecondaryRelevant && secondMaxAttr === 'AGI') return "Corredor"; // Ou Triatleta
+              return "Corredor";
+
+          case 'AGI': // Agilidade Dominante
+              if (isSecondaryRelevant && secondMaxAttr === 'DEX') return "Espadachim"; // Rapidez + Técnica
+              return "Velocista"; // Ou Ninja
+
+          case 'DEX': // Destreza Dominante
+              if (isSecondaryRelevant && secondMaxAttr === 'STR') return "Lutador";
+              if (isSecondaryRelevant && secondMaxAttr === 'AGI') return "Espadachim";
+              return "Atirador";
+
+          case 'INT': // Intelecto Dominante
+              return "Mago";
+
+          case 'CHA': // Carisma Dominante
+              if (isSecondaryRelevant && secondMaxAttr === 'INT') return "Conselheiro";
+              return "Healer";
+          
+          default:
+              return "Aventureiro";
+      }
   };
 
   const handleOnboarding = (e: React.FormEvent<HTMLFormElement>) => {
@@ -306,16 +370,13 @@ export default function App() {
     e.preventDefault();
     if (!user) return;
     const formData = new FormData(e.currentTarget);
-    
     const updatedUser: UserProfile = {
         ...user,
         weight: Number(formData.get('weight')),
         height: Number(formData.get('height')),
         gender: formData.get('gender') as Gender,
         profession: formData.get('profession') as string,
-        // avatarImage já está no estado user se foi alterado
     };
-    
     setUser(updatedUser);
     setIsEditingProfile(false);
     setNarratorText(`Perfil atualizado! Você parece diferente, ${updatedUser.name}.`);
@@ -324,39 +385,25 @@ export default function App() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !user) return;
-
     const reader = new FileReader();
     reader.onload = (event) => {
         const img = new Image();
         img.onload = () => {
-            // Criar canvas para redimensionar (comprimir) a imagem
-            // LocalStorage tem limite de 5MB, Firestore 1MB. Vamos garantir que fique pequeno.
             const canvas = document.createElement('canvas');
             const MAX_WIDTH = 300;
             const MAX_HEIGHT = 300;
             let width = img.width;
             let height = img.height;
-
             if (width > height) {
-                if (width > MAX_WIDTH) {
-                    height *= MAX_WIDTH / width;
-                    width = MAX_WIDTH;
-                }
+                if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
             } else {
-                if (height > MAX_HEIGHT) {
-                    width *= MAX_HEIGHT / height;
-                    height = MAX_HEIGHT;
-                }
+                if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
             }
-
             canvas.width = width;
             canvas.height = height;
             const ctx = canvas.getContext('2d');
             ctx?.drawImage(img, 0, 0, width, height);
-            
-            // Converter para base64 comprimido
             const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-            
             setUser({ ...user, avatarImage: dataUrl });
         };
         img.src = event.target.result as string;
@@ -416,16 +463,19 @@ export default function App() {
       leveledUp = true;
     }
 
-    // --- Atualizar Pontos de Classe ---
-    const newClassPoints = { ...gameState.classPoints };
-    if (selectedActivity.relatedClass) {
-        // Agora dá 1 ponto por unidade realizada. Ex: 1km = 1 ponto de corredor.
-        const pointsEarned = Math.ceil(amount);
-        const currentClassScore = newClassPoints[selectedActivity.relatedClass] || 0;
-        newClassPoints[selectedActivity.relatedClass] = currentClassScore + pointsEarned;
+    // --- Atualizar Atributos ---
+    const newAttributes = { ...gameState.attributes };
+    const pointsEarned = Math.ceil(amount); // 1 ponto por unidade (km, min, rep)
+    
+    if (selectedActivity.primaryAttribute) {
+        newAttributes[selectedActivity.primaryAttribute] = (newAttributes[selectedActivity.primaryAttribute] || 0) + pointsEarned;
+    }
+    // Secundário ganha metade
+    if (selectedActivity.secondaryAttribute) {
+        newAttributes[selectedActivity.secondaryAttribute] = (newAttributes[selectedActivity.secondaryAttribute] || 0) + Math.ceil(pointsEarned * 0.5);
     }
 
-    const newClassTitle = determineClass(newClassPoints);
+    const newClassTitle = determineClass(newAttributes);
 
     const activeBuff = (gameState.activeBuff && Date.now() < gameState.activeBuff.expiresAt) 
         ? gameState.activeBuff 
@@ -437,7 +487,7 @@ export default function App() {
       currentXp: newCurrentXp,
       totalXp: newTotalXp,
       logs: [newLog, ...gameState.logs].slice(0, 50),
-      classPoints: newClassPoints,
+      attributes: newAttributes,
       classTitle: newClassTitle,
       activeBuff: activeBuff
     };
@@ -508,11 +558,9 @@ export default function App() {
 
   const getAvatarUrl = useMemo(() => {
     if (!user) return '';
-    // Se o usuário tiver uma imagem carregada, usa ela
     if (user.avatarImage) return user.avatarImage;
-
     const seed = user.name.replace(/\s/g, '');
-    let style = 'micah'; // Estilo padrão bonito
+    let style = 'micah';
     if (user.gender === 'Masculino') {
         return `https://api.dicebear.com/9.x/micah/svg?seed=${seed}&baseColor=f9c9b6&hair=fondue,fonze&mouth=laughing,smile`;
     } else if (user.gender === 'Feminino') {
@@ -527,6 +575,7 @@ export default function App() {
   const xpNeeded = calculateXpForNextLevel(gameState.level);
 
   if (!user) {
+    // ... (Login Screen remains same)
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950">
         <div className="w-full max-w-md space-y-8">
@@ -589,7 +638,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Header Profile Card (Clickable) */}
+      {/* Header Profile Card */}
       <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40 cursor-pointer hover:bg-slate-900 transition-colors" onClick={() => setIsProfileModalOpen(true)}>
         <div className="max-w-2xl mx-auto p-4">
           <div className="flex items-center justify-between mb-4">
@@ -666,7 +715,6 @@ export default function App() {
                         </button>
                         ))}
                         
-                        {/* Botão Especial de Sono na categoria Física */}
                         {category.id === 'physical' && (
                             <button
                                 onClick={() => setIsSleepModalOpen(true)}
@@ -716,10 +764,17 @@ export default function App() {
           <div className="text-center space-y-2">
             <div className="inline-block p-4 bg-slate-950 rounded-full text-blue-400 mb-2">{selectedActivity && getIcon(selectedActivity.icon, "w-8 h-8")}</div>
             <p className="text-slate-300 text-sm">Quanto você realizou? <br/><span className="text-blue-400 text-xs">Base: {selectedActivity?.xpPerUnit} XP {isBuffActive && <span className="text-purple-400 ml-1">x {gameState.activeBuff?.multiplier} (Buff)</span>}</span></p>
-            {selectedActivity?.relatedClass ? (
-                <div className="text-emerald-400 text-xs font-bold uppercase tracking-wider">Pontos de Classe: {selectedActivity.relatedClass}</div>
-            ) : (
-                <div className="text-slate-500 text-xs font-bold uppercase tracking-wider">Atividade Básica</div>
+            {selectedActivity?.primaryAttribute && (
+                <div className="flex justify-center gap-2 mt-2">
+                    <span className="text-emerald-400 text-xs font-bold uppercase tracking-wider border border-emerald-900 bg-emerald-900/20 px-2 py-1 rounded">
+                        + {selectedActivity.primaryAttribute}
+                    </span>
+                    {selectedActivity.secondaryAttribute && (
+                         <span className="text-emerald-400/70 text-xs font-bold uppercase tracking-wider border border-emerald-900/50 bg-emerald-900/10 px-2 py-1 rounded">
+                            + {selectedActivity.secondaryAttribute}
+                        </span>
+                    )}
+                </div>
             )}
           </div>
           <div>
@@ -826,8 +881,8 @@ export default function App() {
              )}
              
              <div className="w-full bg-slate-950/50 rounded-2xl p-4 border border-slate-800 mb-6">
-                <h3 className="text-center text-xs font-bold text-slate-500 uppercase mb-4">Atributos de Classe</h3>
-                <RadarChart classPoints={gameState.classPoints} />
+                <h3 className="text-center text-xs font-bold text-slate-500 uppercase mb-4">Atributos (Stats)</h3>
+                <RadarChart attributes={gameState.attributes} />
              </div>
 
              <div className="grid grid-cols-2 w-full gap-4 text-center">
