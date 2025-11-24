@@ -138,6 +138,8 @@ export default function App() {
   const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
   const [isSleepModalOpen, setIsSleepModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isEditingProfile, setIsEditingProfile] = useState(false); // Estado para edição de perfil
+
   const [selectedActivity, setSelectedActivity] = useState<ActivityType | null>(null);
   const [inputAmount, setInputAmount] = useState('');
   
@@ -263,6 +265,24 @@ export default function App() {
     };
     setUser(newUser);
     updateNarrator(newUser, gameState, undefined, true);
+  };
+
+  const handleUpdateProfile = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!user) return;
+    const formData = new FormData(e.currentTarget);
+    
+    const updatedUser: UserProfile = {
+        ...user,
+        weight: Number(formData.get('weight')),
+        height: Number(formData.get('height')),
+        gender: formData.get('gender') as Gender,
+        profession: formData.get('profession') as string
+    };
+    
+    setUser(updatedUser);
+    setIsEditingProfile(false);
+    setNarratorText(`Perfil atualizado! Você parece diferente, ${updatedUser.name}.`);
   };
 
   const updateNarrator = async (u: UserProfile, g: GameState, activityName?: string, isInit = false) => {
@@ -627,14 +647,68 @@ export default function App() {
       </Modal>
 
       {/* User Profile Modal */}
-      <Modal isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} title="Ficha do Personagem" large>
+      <Modal isOpen={isProfileModalOpen} onClose={() => { setIsProfileModalOpen(false); setIsEditingProfile(false); }} title="Ficha do Personagem" large>
           <div className="flex flex-col items-center">
-             <div className="w-32 h-32 rounded-full border-4 border-slate-700 bg-slate-800 overflow-hidden mb-4 shadow-2xl">
+             
+             {/* Edit Button Header */}
+             <div className="w-full flex justify-end mb-[-40px] z-10 relative">
+                 {!isEditingProfile ? (
+                    <button onClick={() => setIsEditingProfile(true)} className="text-slate-400 hover:text-white p-2 rounded bg-slate-800 border border-slate-700">
+                        {getIcon("Pencil", "w-4 h-4")}
+                    </button>
+                 ) : (
+                    <button onClick={() => setIsEditingProfile(false)} className="text-red-400 hover:text-red-300 p-2 rounded bg-slate-800 border border-slate-700">
+                        {getIcon("X", "w-4 h-4")}
+                    </button>
+                 )}
+             </div>
+
+             <div className="w-32 h-32 rounded-full border-4 border-slate-700 bg-slate-800 overflow-hidden mb-4 shadow-2xl relative z-0">
                 <img src={getAvatarUrl} alt="Avatar Grande" className="w-full h-full object-cover" />
              </div>
-             <h2 className="text-2xl font-bold text-white">{user.name}</h2>
-             <p className="text-blue-400 font-bold uppercase tracking-widest text-sm mb-1">{gameState.classTitle}</p>
-             <p className="text-slate-500 text-xs mb-6">Nível {gameState.level} • {user.profession} (Vida Real)</p>
+
+             {isEditingProfile ? (
+                 <form onSubmit={handleUpdateProfile} className="w-full space-y-4 mb-6">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Profissão (Vida Real)</label>
+                      <input name="profession" defaultValue={user.profession} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Gênero</label>
+                            <select name="gender" defaultValue={user.gender} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="Masculino">Masculino</option>
+                                <option value="Feminino">Feminino</option>
+                                <option value="Outros">Outros</option>
+                            </select>
+                        </div>
+                        <div>
+                             <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Altura (cm)</label>
+                             <input type="number" name="height" defaultValue={user.height} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:ring-2 focus:ring-blue-500" />
+                        </div>
+                    </div>
+                    <div>
+                         <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Peso (kg)</label>
+                         <input type="number" step="0.1" name="weight" defaultValue={user.weight} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                    <button type="submit" className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-2 rounded-lg flex items-center justify-center gap-2">
+                        {getIcon("Save", "w-4 h-4")} Salvar Alterações
+                    </button>
+                 </form>
+             ) : (
+                <>
+                    <h2 className="text-2xl font-bold text-white">{user.name}</h2>
+                    <p className="text-blue-400 font-bold uppercase tracking-widest text-sm mb-1">{gameState.classTitle}</p>
+                    <p className="text-slate-500 text-xs mb-6">Nível {gameState.level} • {user.profession} (Vida Real)</p>
+                    <div className="flex gap-4 text-xs text-slate-400 mb-6 border-t border-b border-slate-800 py-2 w-full justify-center bg-slate-800/20">
+                        <span>{user.height} cm</span>
+                        <span>•</span>
+                        <span>{user.weight} kg</span>
+                        <span>•</span>
+                        <span>{user.gender}</span>
+                    </div>
+                </>
+             )}
              
              <div className="w-full bg-slate-950/50 rounded-2xl p-4 border border-slate-800 mb-6">
                 <h3 className="text-center text-xs font-bold text-slate-500 uppercase mb-4">Atributos de Classe</h3>

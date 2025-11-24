@@ -24,7 +24,10 @@ import {
   Crosshair,
   Target,
   Users,
-  Star
+  Star,
+  Pencil,
+  Save,
+  X
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -57,6 +60,11 @@ export const getIcon = (name: string, className?: string) => {
     case 'Target': return <Target {...props} />;
     case 'Users': return <Users {...props} />;
     case 'Star': return <Star {...props} />;
+
+    // UI Actions
+    case 'Pencil': return <Pencil {...props} />;
+    case 'Save': return <Save {...props} />;
+    case 'X': return <X {...props} />;
     
     default: return <Activity {...props} />;
   }
