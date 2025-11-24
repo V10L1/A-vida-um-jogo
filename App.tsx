@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage } from './types';
 import { getIcon } from './components/Icons';
 import { generateRpgFlavorText } from './services/geminiService';
-import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss } from './firebase';
+import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 
 // --- Helper Components ---
@@ -211,6 +211,10 @@ export default function App() {
   // Auth State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  // Auth Views: 'onboarding' (creates character locally), 'login' (email/pass), 'register' (new account email/pass)
+  const [authView, setAuthView] = useState<'onboarding' | 'login' | 'register'>('onboarding');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
 
   // Guild State
   const [currentGuild, setCurrentGuild] = useState<Guild | null>(null);
@@ -463,8 +467,15 @@ export default function App() {
             }
 
             setNarratorText("Sincronização completa. Bem-vindo de volta, herói!");
-          } else if (savedUser && savedGame) {
-              await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
+          } else {
+              // User exists in Auth but not in DB (New Registration)
+              // If we have local data, upload it. If not, wait for onboarding.
+              if (savedUser && savedGame) {
+                  await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
+              } else {
+                  // If completely new (no local data), stay in Onboarding mode but authenticated
+                  setAuthView('onboarding');
+              }
           }
           setIsSyncing(false);
         }
@@ -500,8 +511,29 @@ export default function App() {
     }
   };
 
+  const handleEmailAuth = async (e: React.FormEvent) => {
+      e.preventDefault();
+      try {
+          if (authView === 'register') {
+              await registerWithEmail(authEmail, authPassword);
+              // Auth listener catches this, user will be logged in.
+              // If no profile exists, they will stay on Onboarding screen to create char.
+          } else {
+              await loginWithEmail(authEmail, authPassword);
+          }
+      } catch (e: any) {
+          let msg = e.message;
+          if (e.code === 'auth/invalid-credential') msg = "E-mail ou senha incorretos.";
+          if (e.code === 'auth/email-already-in-use') msg = "Este e-mail já está cadastrado.";
+          if (e.code === 'auth/weak-password') msg = "A senha deve ter pelo menos 6 caracteres.";
+          alert(msg);
+      }
+  };
+
   const handleLogout = async () => {
     await logoutUser();
+    setUser(null); // Clear local session view
+    setAuthView('onboarding'); // Reset view
   };
 
   const calculateXpForNextLevel = (level: number) => {
@@ -872,13 +904,11 @@ export default function App() {
     setNarratorText(`Sono registrado! Bônus de ${percentage.toFixed(0)}% de XP ativo.`);
   };
 
-  // Guild Logic
   const handleCreateGuild = async () => {
       if (!currentUser || !guildCreateName) return;
       const guildId = await createGuild(guildCreateName, currentUser.uid, user!.name, user!.avatarImage, gameState.classTitle, gameState.level);
       if (guildId) {
           setGameState(prev => ({ ...prev, guildId }));
-          // Subscribe will handle setting currentGuild
       }
   };
 
@@ -900,10 +930,8 @@ export default function App() {
   };
 
   const handleAttackBoss = async () => {
-      // Simulação de ataque simples (ex: 5 de dano)
-      // Idealmente isso seria conectado a atividades reais
       if (!currentUser || !currentGuild || !currentGuild.boss) return;
-      const damage = 10 + (gameState.level * 2); // Dano base + nivel
+      const damage = 10 + (gameState.level * 2);
       await attackBoss(currentGuild.id, damage, user!.name);
   };
 
@@ -925,58 +953,96 @@ export default function App() {
   const buffPercentage = isBuffActive ? Math.round((gameState.activeBuff!.multiplier - 1) * 100) : 0;
   const xpNeeded = calculateXpForNextLevel(gameState.level);
 
-  // Filter Quests
   const dailyQuests = gameState.quests.filter(q => q.type === 'daily');
   const weeklyQuests = gameState.quests.filter(q => q.type === 'weekly');
   const unclaimedQuestsCount = gameState.quests.filter(q => q.currentAmount >= q.targetAmount && !q.isClaimed).length;
 
   if (!user) {
-    // ... (Login Screen remains same)
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950">
-        <div className="w-full max-w-md space-y-8">
+        <div className="w-full max-w-md space-y-6">
           <div className="text-center">
-            <h1 className="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">LifeRPG</h1>
-            <p className="mt-2 text-slate-400">Crie seu personagem</p>
+            <h1 className="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-500 mb-2">LifeRPG</h1>
+            <p className="text-slate-400 text-sm">Gamifique sua Evolução</p>
           </div>
-          <form onSubmit={handleOnboarding} className="bg-slate-900/50 p-6 rounded-2xl shadow-xl border border-slate-800 space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Nome do Herói</label>
-              <input name="name" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Aragorn" />
+
+          <div className="bg-slate-900/80 p-6 rounded-2xl shadow-xl border border-slate-800 backdrop-blur-sm">
+            
+            {/* Abas de Navegação Auth */}
+            <div className="flex border-b border-slate-700 mb-6">
+                <button onClick={() => setAuthView('onboarding')} className={`flex-1 pb-2 text-sm font-bold uppercase transition-colors ${authView === 'onboarding' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500 hover:text-slate-300'}`}>
+                    Criar Personagem
+                </button>
+                <button onClick={() => setAuthView('login')} className={`flex-1 pb-2 text-sm font-bold uppercase transition-colors ${authView === 'login' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500 hover:text-slate-300'}`}>
+                    Entrar
+                </button>
+                <button onClick={() => setAuthView('register')} className={`flex-1 pb-2 text-sm font-bold uppercase transition-colors ${authView === 'register' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500 hover:text-slate-300'}`}>
+                    Cadastrar
+                </button>
             </div>
-            <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Gênero</label>
-                  <select name="gender" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none">
-                    <option value="Masculino">Masculino</option>
-                    <option value="Feminino">Feminino</option>
-                    <option value="Outros">Outros</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Data Nasc.</label>
-                  <input type="date" name="dob" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
-                </div>
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Profissão (Vida Real)</label>
-              <input name="profession" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Programador..." />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Peso (kg)</label>
-                <input type="number" name="weight" step="0.1" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Altura (cm)</label>
-                <input type="number" name="height" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
-              </div>
-            </div>
-            <button type="submit" className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-blue-500/20">Iniciar Aventura</button>
-          </form>
-           <div className="text-center pt-4">
-              <button onClick={handleGoogleLogin} className="text-blue-400 hover:text-blue-300 text-sm font-semibold flex items-center justify-center gap-2 w-full">{getIcon("User", "w-4 h-4")} Recuperar com Google</button>
-           </div>
+
+            {authView === 'onboarding' ? (
+                <form onSubmit={handleOnboarding} className="space-y-4 animate-fade-in">
+                    <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Nome do Herói</label>
+                    <input name="name" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Aragorn" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Gênero</label>
+                        <select name="gender" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none">
+                            <option value="Masculino">Masculino</option>
+                            <option value="Feminino">Feminino</option>
+                            <option value="Outros">Outros</option>
+                        </select>
+                        </div>
+                        <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Data Nasc.</label>
+                        <input type="date" name="dob" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                        </div>
+                    </div>
+                    <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Profissão (Vida Real)</label>
+                    <input name="profession" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Programador..." />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Peso (kg)</label>
+                        <input type="number" name="weight" step="0.1" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Altura (cm)</label>
+                        <input type="number" name="height" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                    </div>
+                    </div>
+                    <button type="submit" className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-blue-500/20">Iniciar Jogo Local</button>
+                    <p className="text-[10px] text-slate-500 text-center">Os dados ficam salvos apenas neste dispositivo.</p>
+                </form>
+            ) : (
+                <form onSubmit={handleEmailAuth} className="space-y-4 animate-fade-in">
+                     <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">E-mail</label>
+                        <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="seu@email.com" />
+                     </div>
+                     <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Senha</label>
+                        <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="******" />
+                     </div>
+                     <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors">
+                         {authView === 'register' ? 'Criar Conta' : 'Entrar'}
+                     </button>
+                     
+                     <div className="flex items-center gap-4 before:h-px before:flex-1 before:bg-slate-700 after:h-px after:flex-1 after:bg-slate-700">
+                       <span className="text-slate-500 text-xs font-bold uppercase">OU</span>
+                     </div>
+                     
+                     <button type="button" onClick={handleGoogleLogin} className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-semibold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
+                         {getIcon("User", "w-4 h-4")} Continuar com Google
+                     </button>
+                </form>
+            )}
+
+          </div>
         </div>
       </div>
     );
@@ -1023,7 +1089,7 @@ export default function App() {
                    {currentUser ? (
                       <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-emerald-900/50 text-emerald-400 border border-emerald-800 px-2 py-1 rounded flex items-center gap-1 hover:bg-emerald-900 transition-colors"><div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>Salvo</button>
                    ) : (
-                      <button onClick={(e) => { e.stopPropagation(); handleGoogleLogin(); }} className="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-1 rounded flex items-center gap-1 hover:text-white hover:border-slate-500 transition-colors">☁️ Salvar</button>
+                      <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-1 rounded flex items-center gap-1 hover:text-white hover:border-slate-500 transition-colors">☁️ Salvar</button>
                    )}
                </div>
                <div className="text-right">

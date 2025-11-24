@@ -1,6 +1,14 @@
 // @ts-ignore
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider, signInWithRedirect, signOut, getRedirectResult } from "firebase/auth";
+import { 
+  getAuth, 
+  GoogleAuthProvider, 
+  signInWithRedirect, 
+  signOut, 
+  getRedirectResult,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword
+} from "firebase/auth";
 import { 
   getFirestore, 
   doc, 
@@ -55,19 +63,41 @@ try {
 }
 
 // Funções de Autenticação
+
+// --- Google Auth ---
 export const loginWithGoogle = async () => {
   if (!auth) throw new Error("Firebase não configurado (Falta API Key). Verifique as variáveis de ambiente.");
   try {
-    // Usar Redirect é melhor para mobile que Popup
     await signInWithRedirect(auth, googleProvider);
-    // O código para aqui pois a página recarrega
   } catch (error) {
-    console.error("Erro ao iniciar login:", error);
+    console.error("Erro ao iniciar login Google:", error);
     throw error;
   }
 };
 
-// Nova função para checar erros após o redirecionamento
+// --- Email/Password Auth ---
+export const registerWithEmail = async (email: string, pass: string) => {
+  if (!auth) throw new Error("Firebase não configurado.");
+  try {
+    const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
+    return userCredential.user;
+  } catch (error: any) {
+    console.error("Erro ao registrar:", error);
+    throw error;
+  }
+};
+
+export const loginWithEmail = async (email: string, pass: string) => {
+  if (!auth) throw new Error("Firebase não configurado.");
+  try {
+    const userCredential = await signInWithEmailAndPassword(auth, email, pass);
+    return userCredential.user;
+  } catch (error: any) {
+    console.error("Erro ao logar com email:", error);
+    throw error;
+  }
+};
+
 export const checkRedirectResult = async () => {
     if (!auth) return null;
     try {
