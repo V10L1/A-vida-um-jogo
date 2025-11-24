@@ -404,6 +404,19 @@ export default function App() {
     return { quests: newQuests, lastDaily: newLastDaily, lastWeekly: newLastWeekly };
   };
 
+  // --- Helper: Calcular Bônus de IMC ---
+  const calculateBmiBonus = (weight: number, height: number): number => {
+    if (weight <= 0 || height <= 0) return 0;
+    const heightM = height / 100;
+    const bmi = weight / (heightM * heightM);
+
+    if (bmi > 40.0) return 20; // Obesidade III - Tankiness extremo
+    if (bmi >= 30.0) return 15; // Obesidade I/II
+    if (bmi >= 25.0) return 10; // Sobrepeso
+    if (bmi >= 23.41) return 5; // "Gordinho" / Normal Alto
+    return 0; // Abaixo de 23.41 não ganha bônus de resistência passiva
+  };
+
   // Initialize & Auth Listener
   useEffect(() => {
     const savedUser = localStorage.getItem('liferpg_user');
@@ -673,15 +686,30 @@ export default function App() {
   const handleOnboarding = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
+    const weight = Number(formData.get('weight'));
+    const height = Number(formData.get('height'));
+    
     const newUser: UserProfile = {
       name: formData.get('name') as string,
       dob: formData.get('dob') as string,
-      weight: Number(formData.get('weight')),
-      height: Number(formData.get('height')),
+      weight: weight,
+      height: height,
       gender: formData.get('gender') as Gender,
       profession: formData.get('profession') as string
     };
+    
+    // Aplicar bônus inicial de IMC
+    const bmiBonus = calculateBmiBonus(weight, height);
+    const initialAttributes = { ...gameState.attributes };
+    if (bmiBonus > 0) {
+        initialAttributes.END = bmiBonus;
+    }
+
     setUser(newUser);
+    setGameState(prev => ({
+        ...prev,
+        attributes: initialAttributes
+    }));
     updateNarrator(newUser, gameState, undefined, true);
   };
 
@@ -689,13 +717,33 @@ export default function App() {
     e.preventDefault();
     if (!user) return;
     const formData = new FormData(e.currentTarget);
+    const newWeight = Number(formData.get('weight'));
+    const newHeight = Number(formData.get('height'));
+
+    // Calcular diferença de Bônus de IMC
+    const oldBonus = calculateBmiBonus(user.weight, user.height);
+    const newBonus = calculateBmiBonus(newWeight, newHeight);
+    const bonusDiff = newBonus - oldBonus;
+
     const updatedUser: UserProfile = {
         ...user,
-        weight: Number(formData.get('weight')),
-        height: Number(formData.get('height')),
+        weight: newWeight,
+        height: newHeight,
         gender: formData.get('gender') as Gender,
         profession: formData.get('profession') as string,
     };
+    
+    // Atualizar atributos se houve mudança no tier de IMC
+    if (bonusDiff !== 0) {
+        setGameState(prev => ({
+            ...prev,
+            attributes: {
+                ...prev.attributes,
+                END: Math.max(0, (prev.attributes.END || 0) + bonusDiff)
+            }
+        }));
+    }
+
     setUser(updatedUser);
     setIsEditingProfile(false);
     setNarratorText(`Perfil atualizado! Você parece diferente, ${updatedUser.name}.`);
