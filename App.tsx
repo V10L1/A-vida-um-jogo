@@ -449,6 +449,19 @@ export default function App() {
     return 0; // Abaixo de 23.41 não ganha bônus de resistência passiva
   };
 
+  // Helper para labels de data no histórico
+  const getDayLabel = (timestamp: number) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
+    const check = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+
+    if (check === today) return "Hoje";
+    if (check === yesterday) return "Ontem";
+    return date.toLocaleDateString();
+  };
+
   // Initialize & Auth Listener
   useEffect(() => {
     const savedUser = localStorage.getItem('liferpg_user');
@@ -1472,21 +1485,35 @@ export default function App() {
                             {/* Expanded History */}
                             {isExpanded && logs.length > 1 && (
                                 <div className="bg-slate-900/30 border-t border-slate-700/50 p-2 space-y-1 animate-fade-in">
-                                    {logs.slice(1).map(log => (
-                                        <div key={log.id} className="flex justify-between items-center p-2 rounded hover:bg-slate-800/50 text-xs text-slate-400">
-                                            <div>
-                                                 <span className="inline-block w-12 text-slate-500">{new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                                                 {log.details?.exercise ? (
-                                                     <span>{log.details.exercise} ({log.details.weight}kg x {log.details.reps})</span>
-                                                 ) : log.details?.pace ? (
-                                                     <span>{log.details.distance}km ({log.details.duration})</span>
-                                                 ) : (
-                                                     <span>{log.amount} {activity?.unit}</span>
-                                                 )}
-                                            </div>
-                                            <span className="text-blue-500/70">+{log.xpGained}</span>
-                                        </div>
-                                    ))}
+                                    {logs.slice(1).map((log, index) => {
+                                        const currentDate = getDayLabel(log.timestamp);
+                                        const prevLog = logs.slice(1)[index - 1];
+                                        const prevDate = prevLog ? getDayLabel(prevLog.timestamp) : null;
+                                        const showDivider = index === 0 || currentDate !== prevDate;
+
+                                        return (
+                                          <React.Fragment key={log.id}>
+                                              {showDivider && (
+                                                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-2 mb-1 pl-2 border-l-2 border-slate-700">
+                                                    {currentDate}
+                                                </div>
+                                              )}
+                                              <div className="flex justify-between items-center p-2 rounded hover:bg-slate-800/50 text-xs text-slate-400">
+                                                  <div>
+                                                      <span className="inline-block w-12 text-slate-500">{new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                                      {log.details?.exercise ? (
+                                                          <span>{log.details.exercise} ({log.details.weight}kg x {log.details.reps})</span>
+                                                      ) : log.details?.pace ? (
+                                                          <span>{log.details.distance}km ({log.details.duration})</span>
+                                                      ) : (
+                                                          <span>{log.amount} {activity?.unit}</span>
+                                                      )}
+                                                  </div>
+                                                  <span className="text-blue-500/70">+{log.xpGained}</span>
+                                              </div>
+                                          </React.Fragment>
+                                        );
+                                    })}
                                 </div>
                             )}
                         </div>
