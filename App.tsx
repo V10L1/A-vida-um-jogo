@@ -950,6 +950,12 @@ export default function App() {
         xpGained = Math.floor(amount * selectedActivity.xpPerUnit);
 
         let pointsEarned = Math.ceil(amount);
+
+        // Ajuste específico para Dirigir: 50km = 1 Ponto de Atributo
+        if (selectedActivity.id === 'drive') {
+             pointsEarned = Math.floor(amount / 50);
+        }
+
         if (selectedActivity.primaryAttribute) {
             newAttributes[selectedActivity.primaryAttribute] = (newAttributes[selectedActivity.primaryAttribute] || 0) + pointsEarned;
         }
