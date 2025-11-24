@@ -357,7 +357,7 @@ export default function App() {
         filteredClassActivities = allClassActivities.filter(a => a.category === 'social');
     } else if (currentClass === 'Motorista') {
         filteredClassActivities = allClassActivities.filter(a => a.id === 'drive');
-    } else if (['Bodybuilder', 'Tanque', 'Lutador', 'Berseker'].some(c => currentClass.includes(c))) {
+    } else if (['Bodybuilder', 'Tanque', 'Lutador', 'Berseker', 'Guerreiro'].some(c => currentClass.includes(c))) {
         filteredClassActivities = allClassActivities.filter(a => a.primaryAttribute === 'STR' || a.category === 'combat' || a.id === 'gym');
     } else if (['Corredor', 'Biker', 'Velocista'].some(c => currentClass.includes(c))) {
         // Agora verifica VIG
@@ -674,8 +674,8 @@ export default function App() {
     return level * XP_FOR_NEXT_LEVEL_BASE;
   };
 
-  // --- LÓGICA DE CLASSES BASEADA EM ATRIBUTOS ---
-  const determineClass = (attrs: Record<Attribute, number>): string => {
+  // --- LÓGICA DE CLASSES BASEADA EM ATRIBUTOS, IMC E HISTÓRICO ---
+  const determineClass = (attrs: Record<Attribute, number>, weight: number, height: number, logs: ActivityLog[]): string => {
       // 1. Encontrar Atributo Dominante
       let maxAttr: Attribute = 'STR';
       let maxVal = -1;
@@ -702,13 +702,35 @@ export default function App() {
 
       // 3. Regras de Classes (Arquétipos)
       const isSecondaryRelevant = secondMaxAttr && secondMaxVal > (maxVal * 0.4); // Secundário tem que ser pelo menos 40% do principal
+      
+      // Calcular IMC
+      const heightM = height / 100;
+      const bmi = weight > 0 && height > 0 ? weight / (heightM * heightM) : 22;
+
+      // Analisar Histórico Recente (Últimos 50 logs)
+      let combatCount = 0;
+      let fitnessCount = 0;
+      logs.slice(0, 50).forEach(log => {
+          const act = ACTIVITIES.find(a => a.id === log.activityId);
+          if (act?.category === 'combat') combatCount++;
+          if (act?.category === 'fitness') fitnessCount++;
+      });
 
       switch (maxAttr) {
           case 'STR': // Força Dominante
-              if (isSecondaryRelevant && secondMaxAttr === 'END') return "Tanque"; // Força + Resistência Muscular
+              // Se for pesado (> 28 IMC) e tiver resistencia, é Tanque
+              if (bmi >= 28 && isSecondaryRelevant && secondMaxAttr === 'END') return "Tanque"; 
+              if (bmi >= 28 && !isSecondaryRelevant) return "Tanque"; // Tanque de força pura (Powerlifter)
+
+              // Se tiver IMC Normal/Baixo
               if (isSecondaryRelevant && secondMaxAttr === 'DEX') return "Lutador";
               if (isSecondaryRelevant && secondMaxAttr === 'AGI') return "Berseker";
-              return "Bodybuilder";
+              
+              // Diferenciação por Atividade: Guerreiro (Fitness) vs Lutador (Combate) vs Bodybuilder (Pura Estética)
+              if (combatCount > fitnessCount) return "Lutador";
+              if (fitnessCount > combatCount) return "Guerreiro";
+              
+              return "Guerreiro"; // Default para STR sem secondary relevante e IMC normal
           
           case 'VIG': // Vigor Dominante (Cardio) - Antigo END
               if (isSecondaryRelevant && secondMaxAttr === 'STR') return "Biker"; 
@@ -716,7 +738,11 @@ export default function App() {
               return "Corredor";
 
           case 'END': // Resistência Muscular Dominante
-               if (isSecondaryRelevant && secondMaxAttr === 'STR') return "Crossfitter"; // Alta Repetição + Força
+               if (isSecondaryRelevant && secondMaxAttr === 'STR') {
+                   // Se for pesado com muita resistência
+                   if (bmi >= 28) return "Tanque";
+                   return "Crossfitter"; // Alta Repetição + Força + IMC Normal
+               }
                return "Atleta de Resistência";
 
           case 'AGI': // Agilidade Dominante
@@ -804,7 +830,15 @@ export default function App() {
         }));
     }
 
+    // Reavaliar Classe com novos dados físicos
+    const newClassTitle = determineClass(gameState.attributes, newWeight, newHeight, gameState.logs);
+
     setUser(updatedUser);
+    setGameState(prev => ({
+        ...prev,
+        classTitle: newClassTitle
+    }));
+
     setIsEditingProfile(false);
     setNarratorText(`Perfil atualizado! Você parece diferente, ${updatedUser.name}.`);
   };
@@ -861,7 +895,7 @@ export default function App() {
   };
 
   const handleLogActivity = () => {
-    if (!selectedActivity) return;
+    if (!selectedActivity || !user) return;
 
     let amount = 0;
     let xpGained = 0;
@@ -1076,8 +1110,11 @@ export default function App() {
         }
         return q;
     });
+    
+    // Lista de logs atualizada para passar para determineClass
+    const updatedLogs = [newLog, ...gameState.logs].slice(0, 50);
 
-    const newClassTitle = determineClass(newAttributes);
+    const newClassTitle = determineClass(newAttributes, user.weight, user.height, updatedLogs);
 
     const activeBuff = (gameState.activeBuff && Date.now() < gameState.activeBuff.expiresAt) 
         ? gameState.activeBuff 
@@ -1088,7 +1125,7 @@ export default function App() {
       level: newLevel,
       currentXp: newCurrentXp,
       totalXp: newTotalXp,
-      logs: [newLog, ...gameState.logs].slice(0, 50),
+      logs: updatedLogs,
       attributes: newAttributes,
       classTitle: newClassTitle,
       activeBuff: activeBuff,

@@ -131,7 +131,7 @@ export interface GameState {
 
 // Lista de Classes para Display (Lógica é calculada dinamicamente)
 export const RPG_CLASSES = [
-  'Corredor', 'Biker', 'Lutador', 'Tanque', 
+  'Corredor', 'Biker', 'Lutador', 'Guerreiro', 'Tanque', 
   'Berseker', 'Bodybuilder', 'Espadachim', 'Healer', 
   'Atirador', 'Pistoleiro', 'Conselheiro', 'Mago', 'Motorista', 'NPC'
 ];
