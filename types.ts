@@ -50,8 +50,8 @@ export interface ActivityLog {
     distance?: number; // km
     duration?: string; // MM:SS
     pace?: string; // MM:SS /km
-    // Detalhes de Tiro
-    weapon?: 'curta' | 'longa' | 'espingarda' | 'rifle';
+    // Detalhes de Tiro / Arco / Faca
+    weapon?: string; // Suporta Armas de Fogo, Arcos e Estilos de Faca
     hits?: {
         center: number;
         contour1: number;
@@ -179,8 +179,9 @@ export const ACTIVITIES: ActivityType[] = [
   // --- Combate ---
   { id: 'fight', label: 'Treino de Luta/Boxe', xpPerUnit: 10, unit: 'min', icon: 'Swords', category: 'combat', primaryAttribute: 'STR', secondaryAttribute: 'DEX' },
   { id: 'sword', label: 'Esgrima / Bastão', xpPerUnit: 10, unit: 'min', icon: 'Sword', category: 'combat', primaryAttribute: 'DEX', secondaryAttribute: 'AGI' },
-  { id: 'archery', label: 'Arco e Flecha', xpPerUnit: 40, unit: 'sessão', icon: 'Crosshair', category: 'combat', primaryAttribute: 'DEX' },
+  { id: 'archery', label: 'Arco e Flecha', xpPerUnit: 40, unit: 'sessão', icon: 'Crosshair', category: 'combat', primaryAttribute: 'DEX', secondaryAttribute: 'STR' },
   { id: 'shooting', label: 'Treino de Mira / Tiro', xpPerUnit: 20, unit: 'sessão', icon: 'Target', category: 'combat', primaryAttribute: 'DEX', secondaryAttribute: 'INT' },
+  { id: 'knife_throw', label: 'Arremesso de Faca', xpPerUnit: 25, unit: 'sessão', icon: 'MoveDiagonal', category: 'combat', primaryAttribute: 'DEX', secondaryAttribute: 'AGI' },
 
   // --- Intelectual / Social / Outros ---
   { id: 'study', label: 'Estudo / Leitura', xpPerUnit: 5, unit: 'pág/min', icon: 'BookOpen', category: 'intellect', primaryAttribute: 'INT' },

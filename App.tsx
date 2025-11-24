@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember } from './types';
 import { getIcon } from './components/Icons';
@@ -212,10 +213,10 @@ export default function App() {
   const [runDistance, setRunDistance] = useState('');
   const [runDuration, setRunDuration] = useState(''); // MM:SS
 
-  // --- Shooting Activity State ---
-  const [shootingWeapon, setShootingWeapon] = useState<'curta' | 'longa' | 'espingarda' | 'rifle'>('curta');
-  const [shootingDistance, setShootingDistance] = useState('');
-  const [shootingHits, setShootingHits] = useState({ center: 0, c1: 0, c2: 0, c3: 0, outer: 0 });
+  // --- Target Activities State (Shooting, Archery, Knife) ---
+  const [targetTool, setTargetTool] = useState(''); // Weapon name (Curta, Recurvo, Faca Sem Giro)
+  const [targetDistance, setTargetDistance] = useState('');
+  const [targetHits, setTargetHits] = useState({ center: 0, c1: 0, c2: 0, c3: 0, outer: 0 });
   
   // Sleep Inputs
   const [bedTime, setBedTime] = useState('22:00');
@@ -956,42 +957,61 @@ export default function App() {
              newAttributes.AGI = (newAttributes.AGI || 0) + Math.ceil(pointsEarned * 0.3);
         }
 
-    } else if (selectedActivity.id === 'shooting') {
-        // --- Lógica Especial para Tiro ---
-        const dist = Number(shootingDistance) || 0;
-        const totalShots = shootingHits.center + shootingHits.c1 + shootingHits.c2 + shootingHits.c3 + shootingHits.outer;
+    } else if (selectedActivity.id === 'shooting' || selectedActivity.id === 'archery' || selectedActivity.id === 'knife_throw') {
+        // --- Lógica Unificada para Tiro, Arco e Faca ---
+        const dist = Number(targetDistance) || 0;
+        const totalShots = targetHits.center + targetHits.c1 + targetHits.c2 + targetHits.c3 + targetHits.outer;
         
         if (totalShots <= 0 || dist <= 0) return;
 
         // Calcular Score Bruto
-        const rawScore = (shootingHits.center * 10) + (shootingHits.c1 * 5) + (shootingHits.c2 * 3) + (shootingHits.c3 * 2) + (shootingHits.outer * 1);
+        const rawScore = (targetHits.center * 10) + (targetHits.c1 * 5) + (targetHits.c2 * 3) + (targetHits.c3 * 2) + (targetHits.outer * 1);
         
-        // Fator de Distância (Baseado na Arma)
+        // Fator de Distância (Baseado na Ferramenta/Arma)
         let distanceFactor = 1;
-        if (shootingWeapon === 'curta') {
-            distanceFactor = 1 + (dist / 10); // Curta: 10m é base. 20m = 3x diff.
-        } else if (shootingWeapon === 'espingarda') {
-            distanceFactor = 1 + (dist / 25);
-        } else { // Longa/Rifle
-            distanceFactor = 1 + (dist / 50); // Longa: 50m é base.
+        const tool = targetTool.toLowerCase();
+
+        if (selectedActivity.id === 'shooting') {
+            if (tool === 'curta') distanceFactor = 1 + (dist / 10);
+            else if (tool === 'espingarda') distanceFactor = 1 + (dist / 25);
+            else distanceFactor = 1 + (dist / 50); // Longa/Rifle
+        } else if (selectedActivity.id === 'archery') {
+            // Arcos
+            if (tool === 'composto') distanceFactor = 1 + (dist / 30);
+            else if (tool === 'recurvo') distanceFactor = 1.2 + (dist / 20); // Mais difícil
+            else if (tool === 'longbow') distanceFactor = 1.5 + (dist / 20); // Muito difícil
+            else if (tool === 'besta') distanceFactor = 1 + (dist / 40); // Fácil
+        } else if (selectedActivity.id === 'knife_throw') {
+            // Facas (Distâncias menores)
+            if (dist <= 3) distanceFactor = 1;
+            else distanceFactor = 1 + (dist / 3); // Cada 3m aumenta muito a dificuldade
         }
 
-        xpGained = Math.ceil(rawScore * distanceFactor * 0.2); // Escala para não quebrar o jogo
-        amount = 1;
+        xpGained = Math.ceil(rawScore * distanceFactor * 0.2); 
+        if (selectedActivity.id === 'knife_throw') xpGained = Math.ceil(xpGained * 1.2); // Bonus por ser difícil
+        
+        amount = 1; // 1 sessão
 
         details = {
-            weapon: shootingWeapon,
+            weapon: targetTool,
             distance: dist,
-            hits: { ...shootingHits }
+            hits: { ...targetHits }
         };
 
         const attrPoints = Math.ceil(xpGained / 3);
-        newAttributes.DEX = (newAttributes.DEX || 0) + attrPoints; // Sempre DEX
-
-        if (shootingWeapon === 'curta' || shootingWeapon === 'longa') {
-            newAttributes.INT = (newAttributes.INT || 0) + Math.ceil(attrPoints * 0.5); // Precisão/Calculo
-        } else {
-            newAttributes.STR = (newAttributes.STR || 0) + Math.ceil(attrPoints * 0.5); // Recuo/Peso
+        
+        if (selectedActivity.id === 'shooting') {
+             newAttributes.DEX = (newAttributes.DEX || 0) + attrPoints; 
+             if (tool === 'curta' || tool === 'longa') newAttributes.INT = (newAttributes.INT || 0) + Math.ceil(attrPoints * 0.5);
+             else newAttributes.STR = (newAttributes.STR || 0) + Math.ceil(attrPoints * 0.5);
+        } else if (selectedActivity.id === 'archery') {
+             newAttributes.DEX = (newAttributes.DEX || 0) + attrPoints; 
+             // Arco exige força para puxar
+             newAttributes.STR = (newAttributes.STR || 0) + Math.ceil(attrPoints * 0.6);
+        } else if (selectedActivity.id === 'knife_throw') {
+             newAttributes.DEX = (newAttributes.DEX || 0) + attrPoints;
+             // Faca exige Agilidade/Fluidez
+             newAttributes.AGI = (newAttributes.AGI || 0) + Math.ceil(attrPoints * 0.5);
         }
 
     } else {
@@ -1083,8 +1103,8 @@ export default function App() {
         setInputAmount('');
         setRunDistance('');
         setRunDuration('');
-        setShootingDistance('');
-        setShootingHits({ center: 0, c1: 0, c2: 0, c3: 0, outer: 0 });
+        setTargetDistance('');
+        setTargetHits({ center: 0, c1: 0, c2: 0, c3: 0, outer: 0 });
         setSelectedActivity(null);
     }
     
@@ -1491,6 +1511,12 @@ export default function App() {
                                 } else {
                                     setSelectedActivity(act); 
                                     setIsActivityModalOpen(true); 
+                                    // Reset inputs
+                                    setTargetTool(
+                                        act.id === 'shooting' ? 'curta' : 
+                                        act.id === 'archery' ? 'recurvo' : 
+                                        act.id === 'knife_throw' ? 'sem_giro' : ''
+                                    );
                                 }
                             }}
                             className="flex flex-col items-center justify-center p-3 bg-slate-800/60 hover:bg-slate-700 border border-slate-700 hover:border-blue-500/50 rounded-xl transition-all active:scale-95 group"
@@ -1544,7 +1570,7 @@ export default function App() {
                                         ) : latestLog.details?.pace ? (
                                             <div className="text-xs text-emerald-300">{latestLog.details.distance}km • {latestLog.details.duration}</div>
                                         ) : latestLog.details?.weapon ? (
-                                            <div className="text-xs text-amber-300">{latestLog.details.weapon} • {latestLog.details.distance}m</div>
+                                            <div className="text-xs text-amber-300 capitalize">{latestLog.details.weapon.replace('_', ' ')} • {latestLog.details.distance}m</div>
                                         ) : (
                                             <div className="text-xs text-slate-400/70">
                                                 {latestLog.amount} {activity?.unit}
@@ -1584,7 +1610,7 @@ export default function App() {
                                                       ) : log.details?.pace ? (
                                                           <span>{log.details.distance}km ({log.details.duration})</span>
                                                       ) : log.details?.weapon ? (
-                                                          <span>{log.details.weapon} ({log.details.distance}m)</span>
+                                                          <span className="capitalize">{log.details.weapon.replace('_', ' ')} ({log.details.distance}m)</span>
                                                       ) : (
                                                           <span>{log.amount} {activity?.unit}</span>
                                                       )}
@@ -1713,26 +1739,48 @@ export default function App() {
                      {getIcon("CheckCircle", "w-5 h-5")} Registrar Corrida
                  </button>
              </div>
-        ) : selectedActivity?.id === 'shooting' ? (
-             // --- SHOOTING INPUT FORM ---
+        ) : (selectedActivity?.id === 'shooting' || selectedActivity?.id === 'archery' || selectedActivity?.id === 'knife_throw') ? (
+             // --- TARGET PRACTICE INPUT FORM (Shooting, Archery, Knife) ---
             <div className="space-y-4">
                 <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 mb-2">
-                    <p className="text-xs text-slate-400">XP calculado por Distância, Arma e Precisão.</p>
+                    <p className="text-xs text-slate-400">XP calculado por Distância, Equipamento e Precisão.</p>
                 </div>
                 
                 <div className="grid grid-cols-2 gap-4">
                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Arma</label>
-                        <select value={shootingWeapon} onChange={(e) => setShootingWeapon(e.target.value as any)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none">
-                            <option value="curta">Arma Curta</option>
-                            <option value="longa">Arma Longa</option>
-                            <option value="espingarda">Espingarda</option>
-                            <option value="rifle">Rifle</option>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                            {selectedActivity.id === 'shooting' ? 'Arma' : selectedActivity.id === 'archery' ? 'Arco' : 'Técnica'}
+                        </label>
+                        <select value={targetTool} onChange={(e) => setTargetTool(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none">
+                            {selectedActivity.id === 'shooting' && (
+                                <>
+                                    <option value="curta">Arma Curta</option>
+                                    <option value="longa">Arma Longa</option>
+                                    <option value="espingarda">Espingarda</option>
+                                    <option value="rifle">Rifle</option>
+                                </>
+                            )}
+                            {selectedActivity.id === 'archery' && (
+                                <>
+                                    <option value="recurvo">Arco Recurvo</option>
+                                    <option value="composto">Arco Composto</option>
+                                    <option value="longbow">Longbow (Tradicional)</option>
+                                    <option value="besta">Besta</option>
+                                </>
+                            )}
+                            {selectedActivity.id === 'knife_throw' && (
+                                <>
+                                    <option value="sem_giro">Sem Giro (No Spin)</option>
+                                    <option value="meio_giro">Meio Giro (Half Spin)</option>
+                                    <option value="giro_completo">Giro Completo (Full Spin)</option>
+                                    <option value="militar">Estilo Militar</option>
+                                </>
+                            )}
                         </select>
                      </div>
                      <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Distância (m)</label>
-                        <input type="number" value={shootingDistance} onChange={(e) => setShootingDistance(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: 10" />
+                        <input type="number" value={targetDistance} onChange={(e) => setTargetDistance(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: 10" />
                      </div>
                 </div>
 
@@ -1741,23 +1789,23 @@ export default function App() {
                     <div className="grid grid-cols-3 gap-2">
                         <div className="flex flex-col">
                             <label className="text-[10px] text-red-400 uppercase font-bold">Centro (10)</label>
-                            <input type="number" value={shootingHits.center} onChange={(e) => setShootingHits({...shootingHits, center: Number(e.target.value)})} className="bg-slate-950 border border-red-900/50 rounded p-2 text-center text-white" />
+                            <input type="number" value={targetHits.center} onChange={(e) => setTargetHits({...targetHits, center: Number(e.target.value)})} className="bg-slate-950 border border-red-900/50 rounded p-2 text-center text-white" />
                         </div>
                         <div className="flex flex-col">
                             <label className="text-[10px] text-orange-400 uppercase font-bold">1º Cont. (9)</label>
-                            <input type="number" value={shootingHits.c1} onChange={(e) => setShootingHits({...shootingHits, c1: Number(e.target.value)})} className="bg-slate-950 border border-orange-900/50 rounded p-2 text-center text-white" />
+                            <input type="number" value={targetHits.c1} onChange={(e) => setTargetHits({...targetHits, c1: Number(e.target.value)})} className="bg-slate-950 border border-orange-900/50 rounded p-2 text-center text-white" />
                         </div>
                         <div className="flex flex-col">
                             <label className="text-[10px] text-yellow-400 uppercase font-bold">2º Cont. (8)</label>
-                            <input type="number" value={shootingHits.c2} onChange={(e) => setShootingHits({...shootingHits, c2: Number(e.target.value)})} className="bg-slate-950 border border-yellow-900/50 rounded p-2 text-center text-white" />
+                            <input type="number" value={targetHits.c2} onChange={(e) => setTargetHits({...targetHits, c2: Number(e.target.value)})} className="bg-slate-950 border border-yellow-900/50 rounded p-2 text-center text-white" />
                         </div>
                         <div className="flex flex-col">
                             <label className="text-[10px] text-slate-400 uppercase font-bold">3º Cont. (7)</label>
-                            <input type="number" value={shootingHits.c3} onChange={(e) => setShootingHits({...shootingHits, c3: Number(e.target.value)})} className="bg-slate-950 border border-slate-700 rounded p-2 text-center text-white" />
+                            <input type="number" value={targetHits.c3} onChange={(e) => setTargetHits({...targetHits, c3: Number(e.target.value)})} className="bg-slate-950 border border-slate-700 rounded p-2 text-center text-white" />
                         </div>
                         <div className="flex flex-col">
                             <label className="text-[10px] text-slate-500 uppercase font-bold">Dentro (Ext)</label>
-                            <input type="number" value={shootingHits.outer} onChange={(e) => setShootingHits({...shootingHits, outer: Number(e.target.value)})} className="bg-slate-950 border border-slate-700 rounded p-2 text-center text-white" />
+                            <input type="number" value={targetHits.outer} onChange={(e) => setTargetHits({...targetHits, outer: Number(e.target.value)})} className="bg-slate-950 border border-slate-700 rounded p-2 text-center text-white" />
                         </div>
                     </div>
                 </div>
