@@ -4,18 +4,45 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>LifeRPG</title>
-    <!-- Data URI Favicon to prevent 404 errors without needing an external file -->
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E⚔️%3C/text%3E%3C/svg%3E" />
-    
-    <!-- Polyfill for process.env to prevent crashes in browser environment -->
+    <script src="https://cdn.tailwindcss.com"></script>
     <script>
-      window.process = { 
-        env: { 
-          NODE_ENV: 'development',
-          API_KEY: '' 
-        } 
-      };
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              rpg: {
+                dark: '#0f172a',
+                card: '#1e293b',
+                accent: '#3b82f6',
+                success: '#10b981',
+                gold: '#fbbf24',
+              }
+            },
+            animation: {
+              'pulse-fast': 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            }
+          },
+        },
+      }
     </script>
+    <style>
+      /* Custom Scrollbar for 'Android' feel */
+      ::-webkit-scrollbar {
+        width: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #0f172a;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #334155;
+        border-radius: 3px;
+      }
+      body {
+        background-color: #0f172a;
+        color: white;
+        font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      }
+    </style>
   <script type="importmap">
 {
   "imports": {
@@ -23,15 +50,12 @@
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
     "react/": "https://aistudiocdn.com/react@^19.2.0/",
     "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
-    "vite": "https://aistudiocdn.com/vite@^7.2.4",
-    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.1"
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0"
   }
 }
 </script>
 </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/index.tsx"></script>
   </body>
 </html>
