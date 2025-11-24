@@ -83,9 +83,9 @@ export default function App() {
             let errorMessage = "Erro desconhecido ao conectar.";
             
             if (error.code === 'auth/unauthorized-domain') {
-                errorMessage = `DOMÍNIO NÃO AUTORIZADO (${window.location.hostname}). Adicione-o no Firebase Console > Authentication > Settings > Authorized Domains.`;
+                errorMessage = `DOMÍNIO BLOQUEADO PELO FIREBASE:\n\nO endereço "${window.location.hostname}" não está na lista de permitidos.\n\nVá no Firebase Console > Authentication > Settings > Authorized Domains e adicione: ${window.location.hostname}`;
             } else if (error.code === 'auth/api-key-not-valid-please-pass-a-valid-api-key') {
-                errorMessage = "Chave de API do Firebase inválida ou expirada.";
+                errorMessage = "Chave de API do Firebase inválida ou expirada. Verifique as variáveis na Vercel.";
             } else if (error.message) {
                 errorMessage = error.message;
             }
@@ -148,7 +148,12 @@ export default function App() {
       await loginWithGoogle();
       // O fluxo de redirecionamento vai recarregar a página, então nada aqui roda imediatamente.
     } catch (e: any) {
-      alert("Erro ao iniciar login: " + e.message);
+      console.error(e);
+      if (e.code === 'auth/unauthorized-domain') {
+        alert(`DOMÍNIO BLOQUEADO:\n\nAdicione "${window.location.hostname}" no Firebase Console > Authentication > Settings > Authorized Domains.`);
+      } else {
+        alert("Erro ao iniciar login: " + e.message);
+      }
     }
   };
 
