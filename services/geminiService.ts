@@ -1,14 +1,20 @@
 import { GoogleGenAI } from "@google/genai";
 import { UserProfile, GameState } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Initialize safely. If the key is empty (development/missing env), use a placeholder 
+// to prevent the constructor from crashing the app load. We check validity later.
+const apiKey = process.env.API_KEY || "missing_api_key_placeholder";
+const ai = new GoogleGenAI({ apiKey });
 
 export const generateRpgFlavorText = async (
   user: UserProfile,
   gameState: GameState,
   latestActivity?: string
 ): Promise<string> => {
-  if (!process.env.API_KEY) return "Aventureiro, continue sua jornada!";
+  // Check if the key is valid (not empty and not our placeholder)
+  if (!process.env.API_KEY || process.env.API_KEY.length < 10) {
+    return "Aventureiro, continue sua jornada! (Configure a API Key para narrativas únicas)";
+  }
 
   try {
     const prompt = `
@@ -39,7 +45,8 @@ export const generateRpgFlavorText = async (
 };
 
 export const generateClassTitle = async (gameState: GameState): Promise<string> => {
-    if (!process.env.API_KEY) return "Aventureiro";
+    // Check if the key is valid
+    if (!process.env.API_KEY || process.env.API_KEY.length < 10) return "Aventureiro";
 
     try {
         const prompt = `
