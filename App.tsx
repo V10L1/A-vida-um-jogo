@@ -173,6 +173,13 @@ const ACTIVITY_CATEGORIES = [
     types: ['social'], 
     color: 'text-emerald-400', 
     icon: 'Heart'
+  },
+  {
+    id: 'bad_habit',
+    label: 'Hábitos Nocivos',
+    types: ['bad_habit'],
+    color: 'text-slate-400',
+    icon: 'TriangleAlert'
   }
 ];
 
@@ -346,7 +353,7 @@ export default function App() {
     
     // Separar Pools de Atividade
     const basicActivities = ACTIVITIES.filter(a => BASIC_ACTIVITY_IDS.includes(a.id));
-    const allClassActivities = ACTIVITIES.filter(a => !BASIC_ACTIVITY_IDS.includes(a.id));
+    const allClassActivities = ACTIVITIES.filter(a => !BASIC_ACTIVITY_IDS.includes(a.id) && a.category !== 'bad_habit'); // Exclui hábitos nocivos das quests
 
     // Determinar atividades de classe baseadas no arquétipo do jogador
     let filteredClassActivities = allClassActivities;
@@ -902,6 +909,62 @@ export default function App() {
     let details: ActivityLog['details'] | undefined = undefined;
 
     const newAttributes = { ...gameState.attributes };
+    
+    // --- Lógica de Hábitos Nocivos (Debuffs) ---
+    if (selectedActivity.category === 'bad_habit') {
+        const now = Date.now();
+        let buffMultiplier = 1;
+        let buffDurationHours = 0;
+        let debuffName = "";
+
+        if (selectedActivity.id === 'alcohol') {
+            buffMultiplier = 0.5; // -50% XP
+            buffDurationHours = 12;
+            debuffName = "Ressaca";
+        } else if (selectedActivity.id === 'smoke') {
+            buffMultiplier = 0.7; // -30% XP
+            buffDurationHours = 4;
+            debuffName = "Fôlego Curto";
+        } else if (selectedActivity.id === 'junk_food') {
+            buffMultiplier = 0.8; // -20% XP
+            buffDurationHours = 3;
+            debuffName = "Digestão Pesada";
+        }
+
+        const expireDate = now + (buffDurationHours * 60 * 60 * 1000);
+        
+        setGameState(prev => ({
+            ...prev,
+            activeBuff: {
+                multiplier: buffMultiplier,
+                expiresAt: expireDate,
+                description: `${debuffName}: ${Math.round((buffMultiplier - 1) * 100)}% XP`
+            }
+        }));
+        
+        // Log simples sem XP
+        amount = Number(inputAmount) || 1;
+        xpGained = 0;
+        
+        // Registrar e sair
+        const newLog: ActivityLog = {
+            id: Date.now().toString(),
+            activityId: selectedActivity.id,
+            amount,
+            xpGained,
+            timestamp: Date.now()
+        };
+        
+        setGameState(prev => ({
+            ...prev,
+            logs: [newLog, ...prev.logs].slice(0, 50),
+            // activeBuff já foi setado acima
+        }));
+        
+        setIsActivityModalOpen(false);
+        setNarratorText(`Hábito nocivo registrado. Você sofre de ${debuffName} por ${buffDurationHours} horas.`);
+        return;
+    }
 
     // --- Lógica Especial para Musculação ---
     if (selectedActivity.id === 'gym') {
@@ -1233,7 +1296,7 @@ export default function App() {
 
     setGameState(prev => ({
         ...prev,
-        // Atualiza a missão de sono se ela existir
+        // Atualiza a missão de sono se ela existir (apenas se existir quest, mas nao gera nova)
         quests: prev.quests.map(q => q.activityId === 'sleep' && !q.isClaimed ? { ...q, currentAmount: q.currentAmount + 1 } : q),
         activeBuff: {
             multiplier: Number(multiplier.toFixed(2)),
@@ -1305,6 +1368,8 @@ export default function App() {
 
   const isBuffActive = gameState.activeBuff && Date.now() < gameState.activeBuff.expiresAt;
   const buffPercentage = isBuffActive ? Math.round((gameState.activeBuff!.multiplier - 1) * 100) : 0;
+  const isDebuff = isBuffActive && gameState.activeBuff!.multiplier < 1;
+  
   const xpNeeded = calculateXpForNextLevel(gameState.level);
 
   // Filtragem e Ordenação de Quests
@@ -1468,7 +1533,7 @@ export default function App() {
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-slate-700 bg-slate-800 relative">
                   <img src={getAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                  {isBuffActive && <div className="absolute bottom-0 right-0 bg-purple-600 w-3 h-3 rounded-full border border-slate-900"></div>}
+                  {isBuffActive && <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border border-slate-900 ${isDebuff ? 'bg-red-600 animate-pulse' : 'bg-purple-600'}`}></div>}
               </div>
               <div>
                 <h1 className="font-bold text-lg leading-tight flex items-center gap-2">{user.name}</h1>
@@ -1509,7 +1574,7 @@ export default function App() {
           <div className="relative pt-1">
             <div className="flex mb-2 items-center justify-between">
               <span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-blue-100 bg-slate-800 border border-slate-700">XP {gameState.currentXp} / {xpNeeded}</span>
-              {isBuffActive && <span className="text-xs font-bold text-purple-400 animate-pulse flex items-center gap-1">{getIcon("Clock", "w-3 h-3")} +{buffPercentage}% XP</span>}
+              {isBuffActive && <span className={`text-xs font-bold ${isDebuff ? 'text-red-400' : 'text-purple-400'} animate-pulse flex items-center gap-1`}>{getIcon(isDebuff ? "TriangleAlert" : "Clock", "w-3 h-3")} {buffPercentage}% XP</span>}
             </div>
             <ProgressBar current={gameState.currentXp} max={xpNeeded} color="bg-gradient-to-r from-blue-500 to-indigo-400" />
           </div>
@@ -1562,7 +1627,7 @@ export default function App() {
                             {getIcon(act.icon)}
                             </div>
                             <span className="font-semibold text-xs text-center">{act.label}</span>
-                            <span className="text-[10px] text-slate-400 mt-1">+{isBuffActive ? Math.floor(act.xpPerUnit * gameState.activeBuff!.multiplier) : act.xpPerUnit} XP</span>
+                            <span className="text-[10px] text-slate-400 mt-1">{act.xpPerUnit > 0 ? `+${isBuffActive ? Math.floor(act.xpPerUnit * gameState.activeBuff!.multiplier) : act.xpPerUnit} XP` : 'Debuff'}</span>
                         </button>
                         ))}
                      </div>
@@ -1616,7 +1681,7 @@ export default function App() {
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    <div className="text-blue-400 font-bold text-sm">+{latestLog.xpGained} XP</div>
+                                    <div className={`font-bold text-sm ${latestLog.xpGained > 0 ? 'text-blue-400' : 'text-red-400'}`}>{latestLog.xpGained > 0 ? '+' : ''}{latestLog.xpGained} XP</div>
                                     <div className={`transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`}>
                                         {getIcon("ChevronRight", "w-4 h-4 text-slate-500")}
                                     </div>
@@ -1856,7 +1921,13 @@ export default function App() {
             <div className="space-y-6">
             <div className="text-center space-y-2">
                 <div className="inline-block p-4 bg-slate-950 rounded-full text-blue-400 mb-2">{selectedActivity && getIcon(selectedActivity.icon, "w-8 h-8")}</div>
-                <p className="text-slate-300 text-sm">Quanto você realizou? <br/><span className="text-blue-400 text-xs">Base: {selectedActivity?.xpPerUnit} XP {isBuffActive && <span className="text-purple-400 ml-1">x {gameState.activeBuff?.multiplier} (Buff)</span>}</span></p>
+                <p className="text-slate-300 text-sm">
+                    {selectedActivity?.category === 'bad_habit' ? (
+                        <span className="text-red-400 font-bold">AVISO: Isso aplicará um Debuff no seu ganho de XP.</span>
+                    ) : (
+                        <>Quanto você realizou? <br/><span className="text-blue-400 text-xs">Base: {selectedActivity?.xpPerUnit} XP {isBuffActive && <span className="text-purple-400 ml-1">x {gameState.activeBuff?.multiplier} (Buff)</span>}</span></>
+                    )}
+                </p>
                 {selectedActivity?.primaryAttribute && (
                     <div className="flex justify-center gap-2 mt-2">
                         <span className="text-emerald-400 text-xs font-bold uppercase tracking-wider border border-emerald-900 bg-emerald-900/20 px-2 py-1 rounded">
@@ -1874,7 +1945,10 @@ export default function App() {
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Quantidade ({selectedActivity?.unit})</label>
                 <input type="number" value={inputAmount} onChange={(e) => setInputAmount(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-4 text-2xl text-center text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" autoFocus />
             </div>
-            <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20">{getIcon("Plus", "w-5 h-5")} Confirmar</button>
+            <button onClick={handleLogActivity} className={`w-full text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg ${selectedActivity?.category === 'bad_habit' ? 'bg-red-600 hover:bg-red-500 shadow-red-900/20' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20'}`}>
+                {getIcon(selectedActivity?.category === 'bad_habit' ? "TriangleAlert" : "Plus", "w-5 h-5")} 
+                {selectedActivity?.category === 'bad_habit' ? "Confirmar (Aplicar Debuff)" : "Confirmar"}
+            </button>
             </div>
         )}
       </Modal>

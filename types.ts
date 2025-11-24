@@ -29,7 +29,7 @@ export interface ActivityType {
   xpPerUnit: number;
   unit: string;
   icon: string;
-  category: 'fitness' | 'intellect' | 'health' | 'combat' | 'social';
+  category: 'fitness' | 'intellect' | 'health' | 'combat' | 'social' | 'bad_habit';
   // Agora a atividade dá pontos para atributos especificos
   primaryAttribute?: Attribute;
   secondaryAttribute?: Attribute;
@@ -63,7 +63,7 @@ export interface ActivityLog {
 }
 
 export interface XpBuff {
-  multiplier: number; // ex: 1.16 para +16%
+  multiplier: number; // ex: 1.16 para +16% (ou 0.5 para -50%)
   expiresAt: number; // Timestamp de quando acaba
   description: string;
 }
@@ -188,4 +188,10 @@ export const ACTIVITIES: ActivityType[] = [
   { id: 'drive', label: 'Dirigir', xpPerUnit: 2, unit: 'km', icon: 'Car', category: 'intellect', primaryAttribute: 'DRV', secondaryAttribute: 'DEX' },
   { id: 'volunteer', label: 'Boa Ação / Ajuda', xpPerUnit: 150, unit: 'ação', icon: 'Heart', category: 'social', primaryAttribute: 'CHA', secondaryAttribute: 'INT' },
   { id: 'listen', label: 'Ouvir / Aconselhar', xpPerUnit: 10, unit: 'min', icon: 'Brain', category: 'social', primaryAttribute: 'CHA' },
+  
+  // --- Hábitos Nocivos (Debuffs) ---
+  // XP = 0 pois eles tiram XP via Buff negativo
+  { id: 'smoke', label: 'Fumar Cigarro', xpPerUnit: 0, unit: 'cigarro', icon: 'Cigarette', category: 'bad_habit' },
+  { id: 'alcohol', label: 'Ingerir Álcool', xpPerUnit: 0, unit: 'dose', icon: 'Beer', category: 'bad_habit' },
+  { id: 'junk_food', label: 'Comer Besteira', xpPerUnit: 0, unit: 'refeição', icon: 'Pizza', category: 'bad_habit' },
 ];

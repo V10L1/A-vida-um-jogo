@@ -1,5 +1,4 @@
 
-
 import React from 'react';
 import { 
   Footprints, 
@@ -45,7 +44,11 @@ import {
   Pause,
   RotateCcw,
   Gauge,
-  MoveDiagonal
+  MoveDiagonal,
+  Cigarette,
+  Beer,
+  Pizza,
+  TriangleAlert
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -102,6 +105,12 @@ export const getIcon = (name: string, className?: string) => {
     case 'Skull': return <Skull {...props} />;
     case 'MessageSquare': return <MessageSquare {...props} />;
     case 'Crown': return <Crown {...props} />;
+    
+    // Bad Habits
+    case 'Cigarette': return <Cigarette {...props} />;
+    case 'Beer': return <Beer {...props} />;
+    case 'Pizza': return <Pizza {...props} />;
+    case 'TriangleAlert': return <TriangleAlert {...props} />;
     
     default: return <Activity {...props} />;
   }
