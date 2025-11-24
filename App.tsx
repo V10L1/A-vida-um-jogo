@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType } from './types';
+import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender } from './types';
 import { getIcon } from './components/Icons';
-import { generateRpgFlavorText, generateClassTitle } from './services/geminiService';
+import { generateRpgFlavorText } from './services/geminiService';
 import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 
@@ -25,8 +25,8 @@ const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean; onClose:
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-md shadow-2xl overflow-hidden animate-fade-in-up">
-        <div className="bg-slate-800 p-4 flex justify-between items-center border-b border-slate-700">
+      <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-md shadow-2xl overflow-hidden animate-fade-in-up max-h-[90vh] overflow-y-auto">
+        <div className="bg-slate-800 p-4 flex justify-between items-center border-b border-slate-700 sticky top-0 z-10">
           <h3 className="text-xl font-bold text-white">{title}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-white p-1">✕</button>
         </div>
@@ -48,7 +48,8 @@ export default function App() {
     currentXp: 0,
     totalXp: 0,
     logs: [],
-    classTitle: "Novato",
+    classTitle: "NPC",
+    classPoints: {}, // Inicializa vazio
     activeBuff: null
   });
   const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
@@ -79,9 +80,14 @@ export default function App() {
     
     if (savedUser) setUser(JSON.parse(savedUser));
     if (savedGame) {
-        // Garantir retrocompatibilidade com saves antigos sem activeBuff
+        // Garantir retrocompatibilidade
         const parsedGame = JSON.parse(savedGame);
-        setGameState(prev => ({ ...prev, ...parsedGame }));
+        setGameState(prev => ({ 
+            ...prev, 
+            ...parsedGame,
+            classTitle: parsedGame.classTitle || "NPC",
+            classPoints: parsedGame.classPoints || {} 
+        }));
     }
 
     // 2. Checar resultado de login via redirect
@@ -113,7 +119,7 @@ export default function App() {
           const cloudData = await loadUserDataFromCloud(firebaseUser.uid);
           if (cloudData) {
             setUser(cloudData.userProfile);
-            setGameState(prev => ({ ...prev, ...cloudData.gameState })); // Merge para garantir campos novos
+            setGameState(prev => ({ ...prev, ...cloudData.gameState })); 
             setNarratorText("Sincronização completa. Bem-vindo de volta, herói!");
           } else {
             if (savedUser && savedGame) {
@@ -169,6 +175,23 @@ export default function App() {
     return level * XP_FOR_NEXT_LEVEL_BASE;
   };
 
+  // Helper para determinar a classe dominante
+  const determineClass = (points: Record<string, number>): string => {
+      let maxPoints = 0;
+      let dominantClass = "NPC";
+
+      for (const [className, score] of Object.entries(points)) {
+          if (score > maxPoints) {
+              maxPoints = score;
+              dominantClass = className;
+          }
+      }
+
+      // Se não tiver nenhum ponto em nada, é NPC
+      if (maxPoints === 0) return "NPC";
+      return dominantClass;
+  };
+
   const handleOnboarding = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -177,6 +200,8 @@ export default function App() {
       dob: formData.get('dob') as string,
       weight: Number(formData.get('weight')),
       height: Number(formData.get('height')),
+      gender: formData.get('gender') as Gender,
+      profession: formData.get('profession') as string
     };
     setUser(newUser);
     updateNarrator(newUser, gameState, undefined, true);
@@ -186,15 +211,10 @@ export default function App() {
     setLoadingAi(true);
     try {
       if (isInit) {
-          setNarratorText(`Bem-vindo, ${u.name}. Sua aventura começa agora.`);
+          setNarratorText(`Bem-vindo, ${u.name}. Sua vida como ${u.profession} ficou para trás. Agora você é um ${g.classTitle}!`);
       } else {
           const text = await generateRpgFlavorText(u, g, activityName);
           setNarratorText(text);
-          
-          if (Math.random() > 0.7 || showLevelUp) {
-             const title = await generateClassTitle(g);
-             setGameState(prev => ({...prev, classTitle: title}));
-          }
       }
     } catch (err) {
       console.error(err);
@@ -218,9 +238,6 @@ export default function App() {
         if (now < gameState.activeBuff.expiresAt) {
             xpGained = Math.floor(xpGained * gameState.activeBuff.multiplier);
             buffApplied = true;
-        } else {
-            // Buff expirou, limpar silenciosamente
-            // (Será limpo no próximo setGameState)
         }
     }
     
@@ -245,7 +262,25 @@ export default function App() {
       leveledUp = true;
     }
 
-    // Remover buff se expirado
+    // --- Atualizar Pontos de Classe ---
+    const newClassPoints = { ...gameState.classPoints };
+    if (selectedActivity.relatedClass) {
+        // Ganha 1 ponto por UNIDADE de atividade realizada? 
+        // Ou 1 ponto por registro?
+        // O prompt diz: "cada atividade de classe da um ponto"
+        // Vamos considerar 1 Ponto por Registro para simplificar, 
+        // ou proporcional se for muito fácil. Vamos fazer proporcional leve (amount / amount).
+        // Melhor: 1 ponto por unidade registrada (Ex: 1km = 1 ponto de corredor).
+        
+        const pointsEarned = Math.ceil(amount); // 1km = 1pt, 30min = 30pt
+        const currentClassScore = newClassPoints[selectedActivity.relatedClass] || 0;
+        newClassPoints[selectedActivity.relatedClass] = currentClassScore + pointsEarned;
+    }
+
+    // Recalcular classe dominante
+    const newClassTitle = determineClass(newClassPoints);
+
+    // Remover buff se expirado (apenas para limpeza do state)
     const activeBuff = (gameState.activeBuff && Date.now() < gameState.activeBuff.expiresAt) 
         ? gameState.activeBuff 
         : null;
@@ -256,6 +291,8 @@ export default function App() {
       currentXp: newCurrentXp,
       totalXp: newTotalXp,
       logs: [newLog, ...gameState.logs].slice(0, 50),
+      classPoints: newClassPoints,
+      classTitle: newClassTitle,
       activeBuff: activeBuff
     };
 
@@ -316,17 +353,8 @@ export default function App() {
     const expireDate = new Date();
     expireDate.setHours(bedH, bedM, 0, 0);
 
-    // Se o horário de expiração já passou hoje (ex: registrou sono às 23h, e bedTime é 22h),
-    // assume-se que é para amanhã.
-    // Mas a lógica do prompt diz "até as 22h daquele dia" (dia do registro).
-    // Se eu registrar as 08:00 da manhã que fui dormir as 22:00, o buff dura até hoje as 22:00.
     if (expireDate.getTime() < now.getTime()) {
-        // Se já passou, talvez o usuário esteja registrando atrasado ou o "bedTime" é muito cedo.
-        // Vamos garantir que seja no futuro próximo (hoje a noite)
         if (now.getHours() > bedH) {
-             // Se agora é 23h e bedTime é 22h, o buff já expirou se fosse hoje.
-             // Nesse caso, o buff dura até amanhã às 22h? 
-             // Pela lógica do "ciclo diário", faz sentido durar até o próximo ciclo.
              expireDate.setDate(expireDate.getDate() + 1);
         }
     }
@@ -346,14 +374,12 @@ export default function App() {
     setNarratorText(`Sono registrado! Você ganhou um bônus de ${percentage.toFixed(0)}% de XP até as ${bedTime}.`);
   };
 
-  // Check active buff validity for UI
   const isBuffActive = gameState.activeBuff && Date.now() < gameState.activeBuff.expiresAt;
   const buffPercentage = isBuffActive ? Math.round((gameState.activeBuff!.multiplier - 1) * 100) : 0;
 
   // --- Views ---
 
   if (!user) {
-     // ... (Mantendo código de onboarding igual)
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950">
         <div className="w-full max-w-md space-y-8">
@@ -363,23 +389,40 @@ export default function App() {
             </h1>
             <p className="mt-2 text-slate-400">Crie seu personagem</p>
           </div>
-          <form onSubmit={handleOnboarding} className="bg-slate-900/50 p-8 rounded-2xl shadow-xl border border-slate-800 space-y-6">
+          <form onSubmit={handleOnboarding} className="bg-slate-900/50 p-6 rounded-2xl shadow-xl border border-slate-800 space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-200">Nome do Herói</label>
-              <input name="name" required className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Aragorn" />
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Nome do Herói</label>
+              <input name="name" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Aragorn" />
             </div>
+            
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Gênero</label>
+                  <select name="gender" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none">
+                    <option value="Masculino">Masculino</option>
+                    <option value="Feminino">Feminino</option>
+                    <option value="Outros">Outros</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Data Nasc.</label>
+                  <input type="date" name="dob" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                </div>
+            </div>
+
             <div>
-              <label className="block text-sm font-medium text-slate-200">Data de Nascimento</label>
-              <input type="date" name="dob" required className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Profissão (Vida Real)</label>
+              <input name="profession" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Programador, Professor..." />
             </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-slate-200">Peso (kg)</label>
-                <input type="number" name="weight" step="0.1" required className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Peso (kg)</label>
+                <input type="number" name="weight" step="0.1" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-200">Altura (cm)</label>
-                <input type="number" name="height" required className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Altura (cm)</label>
+                <input type="number" name="height" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
               </div>
             </div>
             <button type="submit" className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-blue-500/20">
@@ -433,7 +476,14 @@ export default function App() {
                 <h1 className="font-bold text-lg leading-tight flex items-center gap-2">
                     {user.name}
                 </h1>
-                <p className="text-xs text-blue-400 font-medium tracking-wider uppercase">{gameState.classTitle}</p>
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-blue-400 font-bold tracking-wider uppercase border border-blue-500/30 px-1.5 py-0.5 rounded bg-blue-500/10">
+                        {gameState.classTitle}
+                    </span>
+                    <span className="text-xs text-slate-500">
+                        ({user.profession})
+                    </span>
+                </div>
               </div>
             </div>
             
@@ -521,7 +571,7 @@ export default function App() {
                 <div className="mb-2 p-3 rounded-full bg-slate-900 group-hover:bg-slate-800 text-blue-400 group-hover:text-blue-300 transition-colors">
                   {getIcon(act.icon)}
                 </div>
-                <span className="font-semibold text-sm">{act.label}</span>
+                <span className="font-semibold text-sm text-center">{act.label}</span>
                 <span className="text-xs text-slate-400">+{isBuffActive ? Math.floor(act.xpPerUnit * gameState.activeBuff!.multiplier) : act.xpPerUnit} XP</span>
               </button>
             ))}
@@ -562,7 +612,9 @@ export default function App() {
                         <div className="text-xs text-slate-400/70">{new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} • {log.amount} {activity?.unit}</div>
                       </div>
                     </div>
-                    <div className="text-blue-400 font-bold text-sm">+{log.xpGained} XP</div>
+                    <div className="text-right">
+                        <div className="text-blue-400 font-bold text-sm">+{log.xpGained} XP</div>
+                    </div>
                   </div>
                 );
               })
@@ -590,6 +642,16 @@ export default function App() {
                  {isBuffActive && <span className="text-purple-400 ml-1">x {gameState.activeBuff?.multiplier} (Buff)</span>}
               </span>
             </p>
+            {selectedActivity?.relatedClass && (
+                <div className="text-emerald-400 text-xs font-bold uppercase tracking-wider">
+                    Concede Pontos de Classe: {selectedActivity.relatedClass}
+                </div>
+            )}
+            {!selectedActivity?.relatedClass && (
+                <div className="text-slate-500 text-xs font-bold uppercase tracking-wider">
+                    Atividade Básica (Sem Pontos de Classe)
+                </div>
+            )}
           </div>
 
           <div>

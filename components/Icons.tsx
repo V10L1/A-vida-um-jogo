@@ -12,7 +12,18 @@ import {
   ChevronRight,
   Plus,
   Moon,
-  Clock
+  Clock,
+  Wind,
+  Bike,
+  Swords,
+  Shield,
+  Flame,
+  BicepsFlexed, // Lucide icon name might vary, checking standard names
+  Sword,
+  Heart,
+  Crosshair,
+  Target,
+  Users
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -31,6 +42,19 @@ export const getIcon = (name: string, className?: string) => {
     case 'Plus': return <Plus {...props} />;
     case 'Moon': return <Moon {...props} />;
     case 'Clock': return <Clock {...props} />;
+    // Novos Ícones
+    case 'Wind': return <Wind {...props} />;
+    case 'Bike': return <Bike {...props} />;
+    case 'Swords': return <Swords {...props} />;
+    case 'Shield': return <Shield {...props} />;
+    case 'Flame': return <Flame {...props} />;
+    case 'Biceps': return <BicepsFlexed {...props} />;
+    case 'Sword': return <Sword {...props} />;
+    case 'Heart': return <Heart {...props} />;
+    case 'Crosshair': return <Crosshair {...props} />;
+    case 'Target': return <Target {...props} />;
+    case 'Users': return <Users {...props} />;
+    
     default: return <Activity {...props} />;
   }
 };
