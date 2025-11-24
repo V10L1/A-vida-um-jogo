@@ -115,8 +115,8 @@ export const logoutUser = async () => {
 };
 
 // Funções de Banco de Dados (Firestore)
-export const saveUserDataToCloud = async (userId: string, user: UserProfile, gameState: GameState) => {
-  if (!db) return;
+export const saveUserDataToCloud = async (userId: string, user: UserProfile, gameState: GameState): Promise<boolean> => {
+  if (!db) return false;
   try {
     await setDoc(doc(db, "users", userId), {
       userProfile: user,
@@ -124,8 +124,10 @@ export const saveUserDataToCloud = async (userId: string, user: UserProfile, gam
       lastUpdated: Date.now()
     });
     console.log("Dados salvos na nuvem!");
+    return true;
   } catch (error) {
     console.error("Erro ao salvar na nuvem:", error);
+    return false;
   }
 };
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage } from './types';
+import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember } from './types';
 import { getIcon } from './components/Icons';
 import { generateRpgFlavorText } from './services/geminiService';
 import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail } from './firebase';
@@ -211,6 +211,7 @@ export default function App() {
   // Auth State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
   // Auth Views: 'onboarding' (creates character locally), 'login' (email/pass), 'register' (new account email/pass)
   const [authView, setAuthView] = useState<'onboarding' | 'login' | 'register'>('onboarding');
   const [authEmail, setAuthEmail] = useState('');
@@ -230,6 +231,38 @@ export default function App() {
 
   // Constants
   const XP_FOR_NEXT_LEVEL_BASE = 100;
+
+  // --- Connectivity Listeners ---
+  useEffect(() => {
+    const handleOnline = () => {
+        setIsOnline(true);
+        // Try to sync if we have dirty data
+        const needsSync = localStorage.getItem('liferpg_needs_sync') === 'true';
+        if (needsSync && currentUser && user && gameState) {
+             setNarratorText("Conexão restabelecida. Sincronizando dados...");
+             setIsSyncing(true);
+             saveUserDataToCloud(currentUser.uid, user, gameState).then((success) => {
+                 if (success) {
+                     localStorage.removeItem('liferpg_needs_sync');
+                     setNarratorText("Sincronização concluída!");
+                 }
+                 setIsSyncing(false);
+             });
+        }
+    };
+    const handleOffline = () => {
+        setIsOnline(false);
+        setNarratorText("Você está offline. Progresso será salvo localmente.");
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+        window.removeEventListener('online', handleOnline);
+        window.removeEventListener('offline', handleOffline);
+    };
+  }, [currentUser, user, gameState]);
 
   // --- Timer Effect ---
   useEffect(() => {
@@ -252,7 +285,6 @@ export default function App() {
   }, [isResting, timerTimeLeft]);
   
   // Helper para gerar quests
-  // Lógica: Diária (Basicas) + Class Specific. Weekly = Daily * 7
   const generateNewQuests = (currentQuests: Quest[], currentClass: string, lastDaily?: number, lastWeekly?: number): { quests: Quest[], lastDaily: number, lastWeekly: number } => {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -271,7 +303,6 @@ export default function App() {
     // Determinar atividades de classe baseadas no arquétipo do jogador
     let filteredClassActivities = allClassActivities;
     
-    // Filtro Inteligente de Classes
     if (currentClass.includes('Mago')) {
         filteredClassActivities = allClassActivities.filter(a => a.category === 'intellect');
     } else if (currentClass.includes('Healer') || currentClass.includes('Conselheiro')) {
@@ -343,7 +374,6 @@ export default function App() {
     if (!lastWeekly || lastWeekly < weekStart) {
         newQuests = newQuests.filter(q => q.type !== 'weekly');
 
-        // Usar lógica similar para selecionar as semanais
         const shuffledBasic = [...basicActivities].sort(() => 0.5 - Math.random());
         const selectedWeekly = shuffledBasic.slice(0, numBasicDaily);
         
@@ -360,7 +390,7 @@ export default function App() {
                 activityId: act.id,
                 targetAmount: target,
                 currentAmount: 0,
-                xpReward: Math.floor(target * act.xpPerUnit * 2.0), // Bonus maior para semanal
+                xpReward: Math.floor(target * act.xpPerUnit * 2.0),
                 isClaimed: false,
                 createdAt: Date.now()
             });
@@ -375,6 +405,7 @@ export default function App() {
   useEffect(() => {
     const savedUser = localStorage.getItem('liferpg_user');
     const savedGame = localStorage.getItem('liferpg_game');
+    const needsSync = localStorage.getItem('liferpg_needs_sync') === 'true';
     
     if (savedUser) setUser(JSON.parse(savedUser));
     if (savedGame) {
@@ -382,7 +413,6 @@ export default function App() {
         const safeAttributes = parsedGame.attributes || { STR: 0, END: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0 };
         const currentClass = parsedGame.classTitle || "NPC";
 
-        // Inicializar com quests se nao tiver
         const initialQuests = parsedGame.quests || [];
         const { quests, lastDaily, lastWeekly } = generateNewQuests(
             initialQuests, 
@@ -401,14 +431,13 @@ export default function App() {
             lastWeeklyQuestGen: lastWeekly
         }));
 
-        if (parsedGame.guildId) {
+        if (parsedGame.guildId && navigator.onLine) {
             subscribeToGuild(parsedGame.guildId, (guild, messages) => {
                 setCurrentGuild(guild);
                 if (messages) setChatMessages(messages);
             });
         }
     } else {
-        // New game start
         const { quests, lastDaily, lastWeekly } = generateNewQuests([], "NPC", 0, 0);
         setGameState(prev => ({
             ...prev,
@@ -437,47 +466,58 @@ export default function App() {
         setCurrentUser(firebaseUser);
         if (firebaseUser) {
           setIsSyncing(true);
-          const cloudData = await loadUserDataFromCloud(firebaseUser.uid);
-          if (cloudData) {
-            setUser(cloudData.userProfile);
-            
-            // Checar quests ao carregar da nuvem tambem
-            const cloudGame = cloudData.gameState;
-            const currentClass = cloudGame.classTitle || "NPC";
-            const { quests, lastDaily, lastWeekly } = generateNewQuests(
-                cloudGame.quests || [],
-                currentClass,
-                cloudGame.lastDailyQuestGen, 
-                cloudGame.lastWeeklyQuestGen
-            );
-
-            setGameState(prev => ({ 
-                ...prev, 
-                ...cloudGame,
-                quests,
-                lastDailyQuestGen: lastDaily,
-                lastWeeklyQuestGen: lastWeekly
-            })); 
-
-            if (cloudGame.guildId) {
-                subscribeToGuild(cloudGame.guildId, (guild, messages) => {
-                    setCurrentGuild(guild);
-                    if (messages) setChatMessages(messages);
-                });
-            }
-
-            setNarratorText("Sincronização completa. Bem-vindo de volta, herói!");
-          } else {
-              // User exists in Auth but not in DB (New Registration)
-              // If we have local data, upload it. If not, wait for onboarding.
-              if (savedUser && savedGame) {
-                  await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
-              } else {
-                  // If completely new (no local data), stay in Onboarding mode but authenticated
-                  setAuthView('onboarding');
+          
+          // IMPORTANT: If we have pending local changes (needsSync), DO NOT overwrite with cloud data.
+          // Instead, upload local data to cloud.
+          if (needsSync && savedUser && savedGame) {
+              console.log("Local changes detected. Syncing UP to cloud instead of DOWN.");
+              const success = await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
+              if (success) {
+                  localStorage.removeItem('liferpg_needs_sync');
+                  setNarratorText("Sincronização pendente concluída!");
               }
+              setIsSyncing(false);
+          } else {
+              // Standard Load: Cloud -> Local
+              const cloudData = await loadUserDataFromCloud(firebaseUser.uid);
+              if (cloudData) {
+                setUser(cloudData.userProfile);
+                
+                const cloudGame = cloudData.gameState;
+                const currentClass = cloudGame.classTitle || "NPC";
+                const { quests, lastDaily, lastWeekly } = generateNewQuests(
+                    cloudGame.quests || [],
+                    currentClass,
+                    cloudGame.lastDailyQuestGen, 
+                    cloudGame.lastWeeklyQuestGen
+                );
+
+                setGameState(prev => ({ 
+                    ...prev, 
+                    ...cloudGame,
+                    quests,
+                    lastDailyQuestGen: lastDaily,
+                    lastWeeklyQuestGen: lastWeekly
+                })); 
+
+                if (cloudGame.guildId) {
+                    subscribeToGuild(cloudGame.guildId, (guild, messages) => {
+                        setCurrentGuild(guild);
+                        if (messages) setChatMessages(messages);
+                    });
+                }
+
+                setNarratorText("Sincronização completa. Bem-vindo de volta, herói!");
+              } else {
+                  // New User in DB but exists locally
+                  if (savedUser && savedGame) {
+                      await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
+                  } else {
+                      setAuthView('onboarding');
+                  }
+              }
+              setIsSyncing(false);
           }
-          setIsSyncing(false);
         }
       });
       return () => unsubscribe();
@@ -487,14 +527,27 @@ export default function App() {
   useEffect(() => {
     if (user) {
       localStorage.setItem('liferpg_user', JSON.stringify(user));
-      if (currentUser && gameState) saveUserDataToCloud(currentUser.uid, user, gameState);
+      // Save trigger is handled in GameState effect usually, but for profile updates:
+      if (currentUser && gameState) {
+          saveUserDataToCloud(currentUser.uid, user, gameState).then((success) => {
+              if (!success) localStorage.setItem('liferpg_needs_sync', 'true');
+          });
+      }
     }
   }, [user]);
 
   useEffect(() => {
     if (gameState) {
       localStorage.setItem('liferpg_game', JSON.stringify(gameState));
-      if (currentUser && user) saveUserDataToCloud(currentUser.uid, user, gameState);
+      if (currentUser && user) {
+          // Attempt to save to cloud. If it fails (offline), mark dirty.
+          saveUserDataToCloud(currentUser.uid, user, gameState).then((success) => {
+              if (!success) {
+                  console.log("Offline or Save Failed. Marking for Sync.");
+                  localStorage.setItem('liferpg_needs_sync', 'true');
+              }
+          });
+      }
     }
   }, [gameState]);
 
@@ -516,8 +569,6 @@ export default function App() {
       try {
           if (authView === 'register') {
               await registerWithEmail(authEmail, authPassword);
-              // Auth listener catches this, user will be logged in.
-              // If no profile exists, they will stay on Onboarding screen to create char.
           } else {
               await loginWithEmail(authEmail, authPassword);
           }
@@ -664,6 +715,12 @@ export default function App() {
   };
 
   const updateNarrator = async (u: UserProfile, g: GameState, activityName?: string, isInit = false) => {
+    if (!isOnline) {
+        if (isInit) setNarratorText("Bem-vindo ao modo offline. Sua jornada continua!");
+        else setNarratorText("Atividade registrada localmente.");
+        return;
+    }
+    
     setLoadingAi(true);
     try {
       if (isInit) {
@@ -905,6 +962,10 @@ export default function App() {
   };
 
   const handleCreateGuild = async () => {
+      if (!isOnline) {
+          alert("Você precisa estar online para criar uma guilda.");
+          return;
+      }
       if (!currentUser || !guildCreateName) return;
       const guildId = await createGuild(guildCreateName, currentUser.uid, user!.name, user!.avatarImage, gameState.classTitle, gameState.level);
       if (guildId) {
@@ -913,6 +974,10 @@ export default function App() {
   };
 
   const handleJoinGuild = async () => {
+      if (!isOnline) {
+          alert("Você precisa estar online para entrar em uma guilda.");
+          return;
+      }
       if (!currentUser || !guildInputId) return;
       const success = await joinGuild(guildInputId, currentUser.uid, user!.name, user!.avatarImage, gameState.classTitle, gameState.level);
       if (success) {
@@ -930,6 +995,10 @@ export default function App() {
   };
 
   const handleAttackBoss = async () => {
+      if (!isOnline) {
+          alert("Você precisa estar online para atacar o Boss.");
+          return;
+      }
       if (!currentUser || !currentGuild || !currentGuild.boss) return;
       const damage = 10 + (gameState.level * 2);
       await attackBoss(currentGuild.id, damage, user!.name);
@@ -1087,9 +1156,15 @@ export default function App() {
                         {unclaimedQuestsCount > 0 && <span className="absolute -top-1 -right-1 flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
                    </button>
                    {currentUser ? (
-                      <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-emerald-900/50 text-emerald-400 border border-emerald-800 px-2 py-1 rounded flex items-center gap-1 hover:bg-emerald-900 transition-colors"><div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>Salvo</button>
+                      isSyncing ? (
+                         <button className="text-[10px] bg-blue-900/50 text-blue-400 border border-blue-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-blue-500 rounded-full animate-spin"></div> Sync</button>
+                      ) : isOnline ? (
+                         <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-emerald-900/50 text-emerald-400 border border-emerald-800 px-2 py-1 rounded flex items-center gap-1 hover:bg-emerald-900 transition-colors"><div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>Salvo</button>
+                      ) : (
+                         <button className="text-[10px] bg-red-900/50 text-red-400 border border-red-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-red-500 rounded-full"></div>Offline</button>
+                      )
                    ) : (
-                      <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-1 rounded flex items-center gap-1 hover:text-white hover:border-slate-500 transition-colors">☁️ Salvar</button>
+                      <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-1 rounded flex items-center gap-1 hover:text-white hover:border-slate-500 transition-colors">☁️ Login</button>
                    )}
                </div>
                <div className="text-right">
@@ -1401,7 +1476,7 @@ export default function App() {
                        {guildTab === 'info' && (
                            <div className="space-y-3">
                                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Membros</h3>
-                               {Object.values(currentGuild.members).map(member => (
+                               {Object.values(currentGuild.members).map((member: GuildMember) => (
                                    <div key={member.uid} className="flex items-center justify-between p-2 bg-slate-800/50 rounded-lg">
                                        <div className="flex items-center gap-3">
                                            <div className="w-8 h-8 bg-slate-700 rounded-full overflow-hidden">
