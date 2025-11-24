@@ -36,7 +36,14 @@ import {
   CheckCircle,
   Lock,
   ArrowBigUp,
-  Car
+  Car,
+  Skull,
+  MessageSquare,
+  Crown,
+  Timer,
+  Play,
+  Pause,
+  RotateCcw
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -77,12 +84,20 @@ export const getIcon = (name: string, className?: string) => {
     case 'Save': return <Save {...props} />;
     case 'X': return <X {...props} />;
     case 'Camera': return <Camera {...props} />;
+    case 'Timer': return <Timer {...props} />;
+    case 'Play': return <Play {...props} />;
+    case 'Pause': return <Pause {...props} />;
+    case 'RotateCcw': return <RotateCcw {...props} />;
     
-    // Quest Icons
+    // Quest & Guild Icons
     case 'Scroll': return <Scroll {...props} />;
     case 'Gift': return <Gift {...props} />;
     case 'CheckCircle': return <CheckCircle {...props} />;
     case 'Lock': return <Lock {...props} />;
+    case 'Shield': return <Shield {...props} />; // Guild use Shield too
+    case 'Skull': return <Skull {...props} />;
+    case 'MessageSquare': return <MessageSquare {...props} />;
+    case 'Crown': return <Crown {...props} />;
     
     default: return <Activity {...props} />;
   }

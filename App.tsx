@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS } from './types';
+import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage } from './types';
 import { getIcon } from './components/Icons';
 import { generateRpgFlavorText } from './services/geminiService';
-import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult } from './firebase';
+import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 
 // --- Helper Components ---
@@ -187,9 +187,18 @@ export default function App() {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [isQuestModalOpen, setIsQuestModalOpen] = useState(false);
+  const [isGuildModalOpen, setIsGuildModalOpen] = useState(false);
 
   const [selectedActivity, setSelectedActivity] = useState<ActivityType | null>(null);
   const [inputAmount, setInputAmount] = useState('');
+
+  // --- Gym Workout State ---
+  const [gymExercise, setGymExercise] = useState('');
+  const [gymWeight, setGymWeight] = useState('');
+  const [gymReps, setGymReps] = useState('');
+  const [gymRestTime, setGymRestTime] = useState('02:00'); // Default 2 mins
+  const [isResting, setIsResting] = useState(false);
+  const [timerTimeLeft, setTimerTimeLeft] = useState(0);
   
   // Sleep Inputs
   const [bedTime, setBedTime] = useState('22:00');
@@ -203,10 +212,40 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
+  // Guild State
+  const [currentGuild, setCurrentGuild] = useState<Guild | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [guildInputId, setGuildInputId] = useState('');
+  const [guildCreateName, setGuildCreateName] = useState('');
+  const [chatInput, setChatInput] = useState('');
+  const [guildTab, setGuildTab] = useState<'info' | 'chat' | 'raid'>('info');
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const timerIntervalRef = useRef<number | null>(null);
+
   // Constants
   const XP_FOR_NEXT_LEVEL_BASE = 100;
-  
-  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // --- Timer Effect ---
+  useEffect(() => {
+    if (isResting && timerTimeLeft > 0) {
+        timerIntervalRef.current = window.setInterval(() => {
+            setTimerTimeLeft(prev => {
+                if (prev <= 1) {
+                    setIsResting(false);
+                    // Play sound or vibrate
+                    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+                    return 0;
+                }
+                return prev - 1;
+            });
+        }, 1000);
+    } else {
+        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    }
+    return () => { if (timerIntervalRef.current) clearInterval(timerIntervalRef.current); };
+  }, [isResting, timerTimeLeft]);
   
   // Helper para gerar quests
   // Lógica: Diária (Basicas) + Class Specific. Weekly = Daily * 7
@@ -261,8 +300,8 @@ export default function App() {
         if (act.unit === 'pág/min') dailyBase = 15;
         if (act.unit === 'sessão') dailyBase = 1;
         if (act.unit === 'ação') dailyBase = 1;
-        // Ajuste especifico para dirigir pois 1km é muito pouco
-        if (act.id === 'drive') dailyBase = 20; // 20km por dia de missão
+        if (act.id === 'drive') dailyBase = 20;
+        if (act.id === 'gym') dailyBase = 3; // 3 series por dia
 
         if (type === 'weekly') return dailyBase * 7;
         return dailyBase;
@@ -357,6 +396,13 @@ export default function App() {
             lastDailyQuestGen: lastDaily,
             lastWeeklyQuestGen: lastWeekly
         }));
+
+        if (parsedGame.guildId) {
+            subscribeToGuild(parsedGame.guildId, (guild, messages) => {
+                setCurrentGuild(guild);
+                if (messages) setChatMessages(messages);
+            });
+        }
     } else {
         // New game start
         const { quests, lastDaily, lastWeekly } = generateNewQuests([], "NPC", 0, 0);
@@ -409,6 +455,13 @@ export default function App() {
                 lastWeeklyQuestGen: lastWeekly
             })); 
 
+            if (cloudGame.guildId) {
+                subscribeToGuild(cloudGame.guildId, (guild, messages) => {
+                    setCurrentGuild(guild);
+                    if (messages) setChatMessages(messages);
+                });
+            }
+
             setNarratorText("Sincronização completa. Bem-vindo de volta, herói!");
           } else if (savedUser && savedGame) {
               await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
@@ -434,6 +487,10 @@ export default function App() {
     }
   }, [gameState]);
 
+  // Scroll chat to bottom
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages, isGuildModalOpen, guildTab]);
 
   const handleGoogleLogin = async () => {
     try {
@@ -591,10 +648,44 @@ export default function App() {
   };
 
   const handleLogActivity = () => {
-    if (!selectedActivity || !inputAmount || isNaN(Number(inputAmount))) return;
+    if (!selectedActivity) return;
 
-    const amount = Number(inputAmount);
-    let xpGained = Math.floor(amount * selectedActivity.xpPerUnit);
+    let amount = 0;
+    let xpGained = 0;
+    let details: ActivityLog['details'] | undefined = undefined;
+
+    // Lógica para Musculação
+    if (selectedActivity.id === 'gym') {
+        const weight = Number(gymWeight) || 0;
+        const reps = Number(gymReps) || 0;
+        if (reps <= 0) return;
+
+        amount = 1; // 1 série
+        // XP Formula: (Peso * Reps * 0.05) + 5 base
+        // Se for peso do corpo (0kg), considera como se fosse 10kg para não zerar
+        const effectiveWeight = weight > 0 ? weight : 10;
+        xpGained = Math.floor((effectiveWeight * reps * 0.05) + 5);
+
+        details = {
+            exercise: gymExercise || 'Exercício',
+            weight: weight,
+            reps: reps,
+            restTime: 0 // Será tratado pelo timer visual
+        };
+
+        // Iniciar timer
+        const [mins, secs] = gymRestTime.split(':').map(Number);
+        const totalSecs = (mins * 60) + secs;
+        if (totalSecs > 0) {
+            setTimerTimeLeft(totalSecs);
+            setIsResting(true);
+        }
+    } else {
+        // Lógica Padrão
+        if (!inputAmount || isNaN(Number(inputAmount))) return;
+        amount = Number(inputAmount);
+        xpGained = Math.floor(amount * selectedActivity.xpPerUnit);
+    }
 
     let buffApplied = false;
     if (gameState.activeBuff) {
@@ -611,6 +702,7 @@ export default function App() {
       amount,
       xpGained,
       timestamp: Date.now(),
+      details: details
     };
 
     let newCurrentXp = gameState.currentXp + xpGained;
@@ -628,8 +720,14 @@ export default function App() {
 
     // --- Atualizar Atributos ---
     const newAttributes = { ...gameState.attributes };
-    const pointsEarned = Math.ceil(amount);
+    let pointsEarned = Math.ceil(amount);
     
+    // Ajuste de pontos para Gym
+    if (selectedActivity.id === 'gym') {
+        // Ganha mais STR baseado na carga
+        pointsEarned = Math.ceil(xpGained / 10);
+    }
+
     if (selectedActivity.primaryAttribute) {
         newAttributes[selectedActivity.primaryAttribute] = (newAttributes[selectedActivity.primaryAttribute] || 0) + pointsEarned;
     }
@@ -667,16 +765,22 @@ export default function App() {
     };
 
     setGameState(newState);
-    setIsActivityModalOpen(false);
-    setInputAmount('');
-    setSelectedActivity(null);
+    
+    // Só fecha o modal se não for Gym (pois Gym tem o timer)
+    if (selectedActivity.id !== 'gym') {
+        setIsActivityModalOpen(false);
+        setInputAmount('');
+        setSelectedActivity(null);
+    }
     
     if (leveledUp) {
       setShowLevelUp(true);
       setTimeout(() => setShowLevelUp(false), 5000);
       updateNarrator(user!, newState, "LEVEL UP");
     } else {
-      updateNarrator(user!, newState, selectedActivity.label + (buffApplied ? " (Buffado)" : ""));
+        if (selectedActivity.id !== 'gym') {
+             updateNarrator(user!, newState, selectedActivity.label + (buffApplied ? " (Buffado)" : ""));
+        }
     }
   };
 
@@ -766,6 +870,41 @@ export default function App() {
 
     setIsSleepModalOpen(false);
     setNarratorText(`Sono registrado! Bônus de ${percentage.toFixed(0)}% de XP ativo.`);
+  };
+
+  // Guild Logic
+  const handleCreateGuild = async () => {
+      if (!currentUser || !guildCreateName) return;
+      const guildId = await createGuild(guildCreateName, currentUser.uid, user!.name, user!.avatarImage, gameState.classTitle, gameState.level);
+      if (guildId) {
+          setGameState(prev => ({ ...prev, guildId }));
+          // Subscribe will handle setting currentGuild
+      }
+  };
+
+  const handleJoinGuild = async () => {
+      if (!currentUser || !guildInputId) return;
+      const success = await joinGuild(guildInputId, currentUser.uid, user!.name, user!.avatarImage, gameState.classTitle, gameState.level);
+      if (success) {
+          setGameState(prev => ({ ...prev, guildId: guildInputId }));
+          setGuildInputId('');
+      } else {
+          alert("Guilda não encontrada ou erro ao entrar.");
+      }
+  };
+
+  const handleSendMessage = async () => {
+      if (!currentUser || !currentGuild || !chatInput.trim()) return;
+      await sendMessage(currentGuild.id, currentUser.uid, user!.name, chatInput);
+      setChatInput('');
+  };
+
+  const handleAttackBoss = async () => {
+      // Simulação de ataque simples (ex: 5 de dano)
+      // Idealmente isso seria conectado a atividades reais
+      if (!currentUser || !currentGuild || !currentGuild.boss) return;
+      const damage = 10 + (gameState.level * 2); // Dano base + nivel
+      await attackBoss(currentGuild.id, damage, user!.name);
   };
 
   const getAvatarUrl = useMemo(() => {
@@ -874,6 +1013,9 @@ export default function App() {
             
             <div className="flex flex-col items-end gap-1">
                <div className="flex gap-2">
+                   <button onClick={(e) => { e.stopPropagation(); setIsGuildModalOpen(true); }} className="relative text-[10px] bg-indigo-900/40 text-indigo-400 border border-indigo-700/50 px-2 py-1 rounded flex items-center gap-1 hover:bg-indigo-900/60 transition-colors">
+                        {getIcon("Shield", "w-3 h-3")} Clã
+                   </button>
                    <button onClick={(e) => { e.stopPropagation(); setIsQuestModalOpen(true); }} className="relative text-[10px] bg-amber-900/40 text-amber-400 border border-amber-700/50 px-2 py-1 rounded flex items-center gap-1 hover:bg-amber-900/60 transition-colors">
                         {getIcon("Scroll", "w-3 h-3")} Quests
                         {unclaimedQuestsCount > 0 && <span className="absolute -top-1 -right-1 flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
@@ -967,7 +1109,11 @@ export default function App() {
                       <div className="p-2 bg-slate-900 rounded-full text-slate-400">{getIcon(activity?.icon || 'Activity', 'w-4 h-4')}</div>
                       <div>
                         <div className="font-medium text-sm">{activity?.label}</div>
-                        <div className="text-xs text-slate-400/70">{new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} • {log.amount} {activity?.unit}</div>
+                        {log.details ? (
+                             <div className="text-xs text-blue-300">{log.details.exercise} • {log.details.weight}kg x {log.details.reps}</div>
+                        ) : (
+                             <div className="text-xs text-slate-400/70">{new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} • {log.amount} {activity?.unit}</div>
+                        )}
                       </div>
                     </div>
                     <div className="text-right">
@@ -983,29 +1129,84 @@ export default function App() {
 
       {/* Activity Modal */}
       <Modal isOpen={isActivityModalOpen} onClose={() => setIsActivityModalOpen(false)} title={selectedActivity?.label || 'Registrar'}>
-        <div className="space-y-6">
-          <div className="text-center space-y-2">
-            <div className="inline-block p-4 bg-slate-950 rounded-full text-blue-400 mb-2">{selectedActivity && getIcon(selectedActivity.icon, "w-8 h-8")}</div>
-            <p className="text-slate-300 text-sm">Quanto você realizou? <br/><span className="text-blue-400 text-xs">Base: {selectedActivity?.xpPerUnit} XP {isBuffActive && <span className="text-purple-400 ml-1">x {gameState.activeBuff?.multiplier} (Buff)</span>}</span></p>
-            {selectedActivity?.primaryAttribute && (
-                <div className="flex justify-center gap-2 mt-2">
-                    <span className="text-emerald-400 text-xs font-bold uppercase tracking-wider border border-emerald-900 bg-emerald-900/20 px-2 py-1 rounded">
-                        + {selectedActivity.primaryAttribute}
-                    </span>
-                    {selectedActivity.secondaryAttribute && (
-                         <span className="text-emerald-400/70 text-xs font-bold uppercase tracking-wider border border-emerald-900/50 bg-emerald-900/10 px-2 py-1 rounded">
-                            + {selectedActivity.secondaryAttribute}
+        {selectedActivity?.id === 'gym' && isResting ? (
+             // --- GYM TIMER VIEW ---
+             <div className="flex flex-col items-center justify-center space-y-6 py-6">
+                 <div className="text-center animate-pulse">
+                    <h3 className="text-slate-400 text-sm uppercase tracking-widest font-bold mb-2">Descanso</h3>
+                    <div className="text-6xl font-black text-white tabular-nums">
+                        {Math.floor(timerTimeLeft / 60).toString().padStart(2, '0')}:{(timerTimeLeft % 60).toString().padStart(2, '0')}
+                    </div>
+                 </div>
+                 <div className="flex gap-4">
+                     <button onClick={() => { setIsResting(false); setTimerTimeLeft(0); }} className="bg-red-900/50 hover:bg-red-900 text-red-200 px-6 py-3 rounded-xl font-bold flex items-center gap-2">
+                         {getIcon("X", "w-5 h-5")} Pular
+                     </button>
+                     <button onClick={() => setTimerTimeLeft(prev => prev + 30)} className="bg-blue-900/50 hover:bg-blue-900 text-blue-200 px-6 py-3 rounded-xl font-bold flex items-center gap-2">
+                         {getIcon("Plus", "w-5 h-5")} +30s
+                     </button>
+                 </div>
+                 <p className="text-xs text-slate-500">Respire fundo. A próxima série te espera.</p>
+             </div>
+        ) : selectedActivity?.id === 'gym' ? (
+             // --- GYM INPUT FORM ---
+             <div className="space-y-4">
+                 <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex items-center gap-3 mb-4">
+                     <div className="p-2 bg-slate-900 rounded-full text-blue-400">{getIcon("Biceps")}</div>
+                     <div className="text-sm text-slate-300">Registre sua série. O XP é calculado pela carga total.</div>
+                 </div>
+                 
+                 <div>
+                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Exercício</label>
+                     <input type="text" value={gymExercise} onChange={(e) => setGymExercise(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Supino Reto" autoFocus />
+                 </div>
+
+                 <div className="grid grid-cols-2 gap-4">
+                     <div>
+                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Carga (kg)</label>
+                         <input type="number" value={gymWeight} onChange={(e) => setGymWeight(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" />
+                     </div>
+                     <div>
+                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Repetições</label>
+                         <input type="number" value={gymReps} onChange={(e) => setGymReps(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" />
+                     </div>
+                 </div>
+
+                 <div>
+                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1 flex items-center gap-1">{getIcon("Timer", "w-3 h-3")} Intervalo (min:seg)</label>
+                     <input type="time" value={gymRestTime} onChange={(e) => setGymRestTime(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                 </div>
+
+                 <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 mt-4">
+                     {getIcon("CheckCircle", "w-5 h-5")} Concluir Série
+                 </button>
+             </div>
+        ) : (
+            // --- STANDARD INPUT ---
+            <div className="space-y-6">
+            <div className="text-center space-y-2">
+                <div className="inline-block p-4 bg-slate-950 rounded-full text-blue-400 mb-2">{selectedActivity && getIcon(selectedActivity.icon, "w-8 h-8")}</div>
+                <p className="text-slate-300 text-sm">Quanto você realizou? <br/><span className="text-blue-400 text-xs">Base: {selectedActivity?.xpPerUnit} XP {isBuffActive && <span className="text-purple-400 ml-1">x {gameState.activeBuff?.multiplier} (Buff)</span>}</span></p>
+                {selectedActivity?.primaryAttribute && (
+                    <div className="flex justify-center gap-2 mt-2">
+                        <span className="text-emerald-400 text-xs font-bold uppercase tracking-wider border border-emerald-900 bg-emerald-900/20 px-2 py-1 rounded">
+                            + {selectedActivity.primaryAttribute}
                         </span>
-                    )}
-                </div>
-            )}
-          </div>
-          <div>
-             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Quantidade ({selectedActivity?.unit})</label>
-             <input type="number" value={inputAmount} onChange={(e) => setInputAmount(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-4 text-2xl text-center text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" autoFocus />
-          </div>
-          <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20">{getIcon("Plus", "w-5 h-5")} Confirmar</button>
-        </div>
+                        {selectedActivity.secondaryAttribute && (
+                            <span className="text-emerald-400/70 text-xs font-bold uppercase tracking-wider border border-emerald-900/50 bg-emerald-900/10 px-2 py-1 rounded">
+                                + {selectedActivity.secondaryAttribute}
+                            </span>
+                        )}
+                    </div>
+                )}
+            </div>
+            <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Quantidade ({selectedActivity?.unit})</label>
+                <input type="number" value={inputAmount} onChange={(e) => setInputAmount(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-4 text-2xl text-center text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" autoFocus />
+            </div>
+            <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20">{getIcon("Plus", "w-5 h-5")} Confirmar</button>
+            </div>
+        )}
       </Modal>
 
       {/* Sleep Modal */}
@@ -1085,6 +1286,126 @@ export default function App() {
                 </div>
              </div>
         </div>
+      </Modal>
+
+      {/* Guild Modal */}
+      <Modal isOpen={isGuildModalOpen} onClose={() => setIsGuildModalOpen(false)} title="Salão da Guilda" large>
+           {!gameState.guildId ? (
+               <div className="space-y-8 text-center py-6">
+                   <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700">
+                       <h3 className="text-xl font-bold text-white mb-2">Entrar em uma Guilda</h3>
+                       <p className="text-slate-400 text-sm mb-4">Digite o ID da guilda para se juntar aos seus aliados.</p>
+                       <div className="flex gap-2">
+                           <input value={guildInputId} onChange={(e) => setGuildInputId(e.target.value)} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg p-3 text-white outline-none" placeholder="ID da Guilda" />
+                           <button onClick={handleJoinGuild} className="bg-blue-600 hover:bg-blue-500 px-4 rounded-lg font-bold">Entrar</button>
+                       </div>
+                   </div>
+                   
+                   <div className="flex items-center gap-4 before:h-px before:flex-1 before:bg-slate-700 after:h-px after:flex-1 after:bg-slate-700">
+                       <span className="text-slate-500 text-xs font-bold uppercase">OU</span>
+                   </div>
+
+                   <div className="bg-indigo-900/20 p-6 rounded-2xl border border-indigo-800">
+                       <h3 className="text-xl font-bold text-indigo-300 mb-2">Fundar nova Guilda</h3>
+                       <p className="text-indigo-200/60 text-sm mb-4">Crie seu próprio legado.</p>
+                       <div className="flex gap-2">
+                           <input value={guildCreateName} onChange={(e) => setGuildCreateName(e.target.value)} className="flex-1 bg-slate-950 border border-indigo-800/50 rounded-lg p-3 text-white outline-none" placeholder="Nome da Guilda" />
+                           <button onClick={handleCreateGuild} className="bg-indigo-600 hover:bg-indigo-500 px-4 rounded-lg font-bold text-white">Criar</button>
+                       </div>
+                   </div>
+               </div>
+           ) : currentGuild ? (
+               <div className="flex flex-col h-[60vh]">
+                   {/* Guild Header */}
+                   <div className="flex justify-between items-center mb-4 bg-slate-800 p-3 rounded-lg">
+                       <div>
+                           <h2 className="text-xl font-bold text-white flex items-center gap-2">{getIcon("Shield", "w-5 h-5 text-indigo-400")} {currentGuild.name}</h2>
+                           <p className="text-xs text-slate-400">Nível {currentGuild.level} • ID: <span className="select-all font-mono bg-slate-900 px-1 rounded">{currentGuild.id}</span></p>
+                       </div>
+                       <div className="flex gap-2">
+                           <button onClick={() => setGuildTab('info')} className={`p-2 rounded ${guildTab === 'info' ? 'bg-indigo-600' : 'bg-slate-700'}`}>{getIcon("Users", "w-4 h-4")}</button>
+                           <button onClick={() => setGuildTab('chat')} className={`p-2 rounded ${guildTab === 'chat' ? 'bg-indigo-600' : 'bg-slate-700'}`}>{getIcon("MessageSquare", "w-4 h-4")}</button>
+                           <button onClick={() => setGuildTab('raid')} className={`p-2 rounded ${guildTab === 'raid' ? 'bg-red-600' : 'bg-slate-700'}`}>{getIcon("Skull", "w-4 h-4")}</button>
+                       </div>
+                   </div>
+
+                   {/* Guild Content */}
+                   <div className="flex-1 overflow-y-auto min-h-0 bg-slate-950/30 rounded-xl border border-slate-800 p-4">
+                       
+                       {guildTab === 'info' && (
+                           <div className="space-y-3">
+                               <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Membros</h3>
+                               {Object.values(currentGuild.members).map(member => (
+                                   <div key={member.uid} className="flex items-center justify-between p-2 bg-slate-800/50 rounded-lg">
+                                       <div className="flex items-center gap-3">
+                                           <div className="w-8 h-8 bg-slate-700 rounded-full overflow-hidden">
+                                               {member.avatar ? <img src={member.avatar} className="w-full h-full object-cover"/> : <div className="flex items-center justify-center h-full text-xs">?</div>}
+                                           </div>
+                                           <div>
+                                               <div className="font-bold text-sm text-slate-200">{member.name}</div>
+                                               <div className="text-[10px] text-blue-400 uppercase">{member.classTitle} • Lvl {member.level}</div>
+                                           </div>
+                                       </div>
+                                       {member.role === 'leader' && <span className="text-yellow-500">{getIcon("Crown", "w-4 h-4")}</span>}
+                                   </div>
+                               ))}
+                           </div>
+                       )}
+
+                       {guildTab === 'chat' && (
+                           <div className="flex flex-col h-full">
+                               <div className="flex-1 overflow-y-auto space-y-3 pr-2">
+                                   {chatMessages.map(msg => (
+                                       <div key={msg.id} className={`flex flex-col ${msg.senderId === currentUser?.uid ? 'items-end' : 'items-start'}`}>
+                                           <div className={`max-w-[80%] rounded-lg p-2 text-sm ${msg.type === 'system' ? 'bg-yellow-900/30 border border-yellow-800 text-yellow-200 w-full text-center' : msg.senderId === currentUser?.uid ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
+                                               {msg.type !== 'system' && <span className="text-[10px] opacity-50 block mb-0.5">{msg.senderName}</span>}
+                                               {msg.text}
+                                           </div>
+                                       </div>
+                                   ))}
+                                   <div ref={chatEndRef} />
+                               </div>
+                               <div className="mt-4 flex gap-2">
+                                   <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="flex-1 bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-white" placeholder="Mensagem..." />
+                                   <button onClick={handleSendMessage} className="bg-indigo-600 p-2 rounded-lg">{getIcon("ChevronRight")}</button>
+                               </div>
+                           </div>
+                       )}
+
+                       {guildTab === 'raid' && currentGuild.boss && (
+                           <div className="text-center space-y-6">
+                               <div className="animate-pulse-slow">
+                                   <div className="text-6xl mb-2">{currentGuild.boss.image}</div>
+                                   <h3 className="text-2xl font-black text-red-500 uppercase tracking-widest">{currentGuild.boss.name}</h3>
+                                   <p className="text-red-400 text-xs font-bold">Nível {currentGuild.boss.level}</p>
+                               </div>
+                               
+                               <div className="relative pt-1 px-4">
+                                    <div className="flex mb-2 items-center justify-between">
+                                        <span className="text-xs font-bold text-red-200">{currentGuild.boss.currentHp} / {currentGuild.boss.maxHp} HP</span>
+                                    </div>
+                                    <div className="w-full bg-slate-900 rounded-full h-6 overflow-hidden border border-slate-700">
+                                        <div
+                                            className="h-full bg-gradient-to-r from-red-600 to-red-500 transition-all duration-300 ease-out"
+                                            style={{ width: `${(currentGuild.boss.currentHp / currentGuild.boss.maxHp) * 100}%` }}
+                                        ></div>
+                                    </div>
+                               </div>
+
+                               <div className="bg-slate-900/50 p-4 rounded-xl border border-red-900/30">
+                                   <p className="text-sm text-slate-300 mb-4">Realize exercícios de combate para causar dano!</p>
+                                   <button onClick={handleAttackBoss} className="w-full bg-red-700 hover:bg-red-600 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 shadow-lg shadow-red-900/20 active:scale-95 transition-transform">
+                                       {getIcon("Swords", "w-5 h-5")} ATACAR (Gastar Energia)
+                                   </button>
+                                   <p className="text-[10px] text-slate-500 mt-2">Dano baseado no seu Nível ({gameState.level * 2} + 10)</p>
+                               </div>
+                           </div>
+                       )}
+                   </div>
+               </div>
+           ) : (
+               <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div></div>
+           )}
       </Modal>
 
       {/* User Profile Modal */}

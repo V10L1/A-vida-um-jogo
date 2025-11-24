@@ -33,6 +33,13 @@ export interface ActivityLog {
   amount: number;
   xpGained: number;
   timestamp: number;
+  // Detalhes opcionais para treinos complexos (Musculação)
+  details?: {
+    exercise?: string;
+    weight?: number;
+    reps?: number;
+    restTime?: number;
+  };
 }
 
 export interface XpBuff {
@@ -52,6 +59,42 @@ export interface Quest {
   createdAt: number; // Para saber quando expira
 }
 
+export interface GuildMember {
+    uid: string;
+    name: string;
+    level: number;
+    role: 'leader' | 'member';
+    avatar?: string;
+    classTitle: string;
+}
+
+export interface ChatMessage {
+    id: string;
+    senderId: string;
+    senderName: string;
+    text: string;
+    timestamp: number;
+    type: 'text' | 'system'; // System para avisos de Boss/Level Up
+}
+
+export interface Boss {
+    currentHp: number;
+    maxHp: number;
+    level: number;
+    name: string; // ex: "Dragão da Preguiça", "Golem de Sedentarismo"
+    image: string; // Emoji ou URL
+}
+
+export interface Guild {
+    id: string;
+    name: string;
+    description: string;
+    level: number;
+    members: Record<string, GuildMember>; // Mapa de UID -> Member
+    xp: number; // XP da guilda para subir de nivel
+    boss?: Boss;
+}
+
 export interface GameState {
   level: number;
   currentXp: number;
@@ -63,6 +106,7 @@ export interface GameState {
   quests: Quest[]; // Lista de missoes ativas
   lastDailyQuestGen?: number; // Data da ultima geracao diaria
   lastWeeklyQuestGen?: number; // Data da ultima geracao semanal
+  guildId?: string | null; // ID da guilda se tiver
 }
 
 // Lista de Classes para Display (Lógica é calculada dinamicamente)
@@ -90,11 +134,13 @@ export const ACTIVITIES: ActivityType[] = [
   { id: 'run', label: 'Corrida', xpPerUnit: 30, unit: 'km', icon: 'Wind', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'AGI' },
   { id: 'pushup', label: 'Flexões', xpPerUnit: 2, unit: 'reps', icon: 'Dumbbell', category: 'fitness', primaryAttribute: 'STR' },
   { id: 'abs', label: 'Abdominais', xpPerUnit: 2, unit: 'reps', icon: 'ArrowBigUp', category: 'fitness', primaryAttribute: 'STR', secondaryAttribute: 'END' },
+  { id: 'squat', label: 'Agachamentos', xpPerUnit: 3, unit: 'reps', icon: 'ArrowBigUp', category: 'fitness', primaryAttribute: 'STR', secondaryAttribute: 'END' },
   { id: 'water', label: 'Hidratação', xpPerUnit: 10, unit: 'copos', icon: 'Droplets', category: 'health', primaryAttribute: 'END' },
 
   // --- Atividades Específicas / Classe ---
   { id: 'bike', label: 'Ciclismo', xpPerUnit: 20, unit: 'km', icon: 'Bike', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'STR' },
-  { id: 'gym', label: 'Musculação / Peso', xpPerUnit: 50, unit: 'treino', icon: 'Biceps', category: 'fitness', primaryAttribute: 'STR' },
+  // Gym xpPerUnit é base, mas será calculado dinamicamente pelo peso x reps
+  { id: 'gym', label: 'Musculação / Peso', xpPerUnit: 10, unit: 'série', icon: 'Biceps', category: 'fitness', primaryAttribute: 'STR' },
   { id: 'hiit', label: 'HIIT / Cardio Intenso', xpPerUnit: 8, unit: 'min', icon: 'Flame', category: 'fitness', primaryAttribute: 'AGI', secondaryAttribute: 'END' },
   { id: 'resistence', label: 'Treino de Resistência', xpPerUnit: 5, unit: 'min', icon: 'Shield', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'STR' },
 
