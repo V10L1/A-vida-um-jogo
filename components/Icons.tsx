@@ -35,7 +35,8 @@ import {
   Gift,
   CheckCircle,
   Lock,
-  ArrowBigUp
+  ArrowBigUp,
+  Car
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -69,6 +70,7 @@ export const getIcon = (name: string, className?: string) => {
     case 'Target': return <Target {...props} />;
     case 'Users': return <Users {...props} />;
     case 'Star': return <Star {...props} />;
+    case 'Car': return <Car {...props} />;
 
     // UI Actions
     case 'Pencil': return <Pencil {...props} />;

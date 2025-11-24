@@ -69,7 +69,7 @@ export interface GameState {
 export const RPG_CLASSES = [
   'Corredor', 'Biker', 'Lutador', 'Tanque', 
   'Berseker', 'Bodybuilder', 'Espadachim', 'Healer', 
-  'Atirador', 'Pistoleiro', 'Conselheiro', 'Mago', 'NPC'
+  'Atirador', 'Pistoleiro', 'Conselheiro', 'Mago', 'Motorista', 'NPC'
 ];
 
 export const ATTRIBUTE_LABELS: Record<Attribute, string> = {
@@ -104,8 +104,9 @@ export const ACTIVITIES: ActivityType[] = [
   { id: 'archery', label: 'Arco e Flecha', xpPerUnit: 40, unit: 'sessão', icon: 'Crosshair', category: 'combat', primaryAttribute: 'DEX' },
   { id: 'shooting', label: 'Treino de Mira / Tiro', xpPerUnit: 20, unit: 'sessão', icon: 'Target', category: 'combat', primaryAttribute: 'DEX', secondaryAttribute: 'INT' },
 
-  // --- Intelectual / Social ---
+  // --- Intelectual / Social / Outros ---
   { id: 'study', label: 'Estudo / Leitura', xpPerUnit: 5, unit: 'pág/min', icon: 'BookOpen', category: 'intellect', primaryAttribute: 'INT' },
+  { id: 'drive', label: 'Dirigir', xpPerUnit: 2, unit: 'km', icon: 'Car', category: 'intellect', primaryAttribute: 'DEX', secondaryAttribute: 'INT' },
   { id: 'volunteer', label: 'Boa Ação / Ajuda', xpPerUnit: 150, unit: 'ação', icon: 'Heart', category: 'social', primaryAttribute: 'CHA', secondaryAttribute: 'INT' },
   { id: 'listen', label: 'Ouvir / Aconselhar', xpPerUnit: 10, unit: 'min', icon: 'Brain', category: 'social', primaryAttribute: 'CHA' },
 ];

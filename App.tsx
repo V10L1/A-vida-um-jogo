@@ -233,6 +233,8 @@ export default function App() {
         filteredClassActivities = allClassActivities.filter(a => a.category === 'intellect');
     } else if (currentClass.includes('Healer') || currentClass.includes('Conselheiro')) {
         filteredClassActivities = allClassActivities.filter(a => a.category === 'social');
+    } else if (currentClass === 'Motorista') {
+        filteredClassActivities = allClassActivities.filter(a => a.id === 'drive');
     } else if (['Bodybuilder', 'Tanque', 'Lutador', 'Berseker'].some(c => currentClass.includes(c))) {
         filteredClassActivities = allClassActivities.filter(a => a.primaryAttribute === 'STR' || a.category === 'combat' || a.id === 'gym');
     } else if (['Corredor', 'Biker', 'Velocista'].some(c => currentClass.includes(c))) {
@@ -259,6 +261,8 @@ export default function App() {
         if (act.unit === 'pág/min') dailyBase = 15;
         if (act.unit === 'sessão') dailyBase = 1;
         if (act.unit === 'ação') dailyBase = 1;
+        // Ajuste especifico para dirigir pois 1km é muito pouco
+        if (act.id === 'drive') dailyBase = 20; // 20km por dia de missão
 
         if (type === 'weekly') return dailyBase * 7;
         return dailyBase;
@@ -495,6 +499,7 @@ export default function App() {
           case 'DEX': // Destreza Dominante
               if (isSecondaryRelevant && secondMaxAttr === 'STR') return "Lutador";
               if (isSecondaryRelevant && secondMaxAttr === 'AGI') return "Espadachim";
+              if (isSecondaryRelevant && secondMaxAttr === 'INT') return "Motorista";
               return "Atirador";
 
           case 'INT': // Intelecto Dominante
