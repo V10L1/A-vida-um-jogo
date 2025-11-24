@@ -216,6 +216,7 @@ export default function App() {
   const [authView, setAuthView] = useState<'onboarding' | 'login' | 'register'>('onboarding');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
 
   // Guild State
   const [currentGuild, setCurrentGuild] = useState<Guild | null>(null);
@@ -568,6 +569,10 @@ export default function App() {
       e.preventDefault();
       try {
           if (authView === 'register') {
+              if (authPassword !== authConfirmPassword) {
+                  alert("As senhas não conferem!");
+                  return;
+              }
               await registerWithEmail(authEmail, authPassword);
           } else {
               await loginWithEmail(authEmail, authPassword);
@@ -1097,6 +1102,12 @@ export default function App() {
                         <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Senha</label>
                         <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="******" />
                      </div>
+                     {authView === 'register' && (
+                        <div>
+                            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Confirmar Senha</label>
+                            <input type="password" value={authConfirmPassword} onChange={e => setAuthConfirmPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="******" />
+                        </div>
+                     )}
                      <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors">
                          {authView === 'register' ? 'Criar Conta' : 'Entrar'}
                      </button>
