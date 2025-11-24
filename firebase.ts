@@ -1,3 +1,5 @@
+
+// @ts-ignore
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, signInWithRedirect, signOut, getRedirectResult } from "firebase/auth";
 import { getFirestore, doc, setDoc, getDoc } from "firebase/firestore";

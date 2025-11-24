@@ -1,4 +1,5 @@
 
+
 export type Gender = 'Masculino' | 'Feminino' | 'Outros';
 
 export interface UserProfile {
@@ -80,14 +81,18 @@ export const ATTRIBUTE_LABELS: Record<Attribute, string> = {
     CHA: 'Carisma'
 };
 
+// IDs das atividades básicas para lógica de Quests
+export const BASIC_ACTIVITY_IDS = ['walk', 'run', 'pushup', 'abs', 'water'];
+
 export const ACTIVITIES: ActivityType[] = [
-  // --- Atividades Básicas (Dão pouco atributo, foco em XP geral) ---
+  // --- Atividades Básicas (Missões Diárias Padrão) ---
   { id: 'walk', label: 'Caminhada Leve', xpPerUnit: 15, unit: 'km', icon: 'Footprints', category: 'fitness', primaryAttribute: 'END' },
-  { id: 'pushup', label: 'Flexões Diárias', xpPerUnit: 2, unit: 'reps', icon: 'Dumbbell', category: 'fitness', primaryAttribute: 'STR' },
+  { id: 'run', label: 'Corrida', xpPerUnit: 30, unit: 'km', icon: 'Wind', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'AGI' },
+  { id: 'pushup', label: 'Flexões', xpPerUnit: 2, unit: 'reps', icon: 'Dumbbell', category: 'fitness', primaryAttribute: 'STR' },
+  { id: 'abs', label: 'Abdominais', xpPerUnit: 2, unit: 'reps', icon: 'ArrowBigUp', category: 'fitness', primaryAttribute: 'STR', secondaryAttribute: 'END' },
   { id: 'water', label: 'Hidratação', xpPerUnit: 10, unit: 'copos', icon: 'Droplets', category: 'health', primaryAttribute: 'END' },
 
-  // --- Atividades Principais (Físico) ---
-  { id: 'run', label: 'Corrida', xpPerUnit: 30, unit: 'km', icon: 'Wind', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'AGI' },
+  // --- Atividades Específicas / Classe ---
   { id: 'bike', label: 'Ciclismo', xpPerUnit: 20, unit: 'km', icon: 'Bike', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'STR' },
   { id: 'gym', label: 'Musculação / Peso', xpPerUnit: 50, unit: 'treino', icon: 'Biceps', category: 'fitness', primaryAttribute: 'STR' },
   { id: 'hiit', label: 'HIIT / Cardio Intenso', xpPerUnit: 8, unit: 'min', icon: 'Flame', category: 'fitness', primaryAttribute: 'AGI', secondaryAttribute: 'END' },

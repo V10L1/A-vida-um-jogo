@@ -1,6 +1,7 @@
 
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest } from './types';
+import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS } from './types';
 import { getIcon } from './components/Icons';
 import { generateRpgFlavorText } from './services/geminiService';
 import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult } from './firebase';
@@ -209,11 +210,11 @@ export default function App() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  // Helper para gerar quests aleatorias
-  const generateNewQuests = (currentQuests: Quest[], lastDaily?: number, lastWeekly?: number): { quests: Quest[], lastDaily: number, lastWeekly: number } => {
+  // Helper para gerar quests
+  // Lógica: Diária (Basicas) + Class Specific. Weekly = Daily * 7
+  const generateNewQuests = (currentQuests: Quest[], currentClass: string, lastDaily?: number, lastWeekly?: number): { quests: Quest[], lastDaily: number, lastWeekly: number } => {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    // Inicio da semana (Domingo)
     const day = now.getDay();
     const diff = now.getDate() - day;
     const weekStart = new Date(now.setDate(diff)).setHours(0,0,0,0);
@@ -221,24 +222,37 @@ export default function App() {
     let newQuests = [...currentQuests];
     let newLastDaily = lastDaily || 0;
     let newLastWeekly = lastWeekly || 0;
+    
+    // Separar Pools de Atividade
+    const basicActivities = ACTIVITIES.filter(a => BASIC_ACTIVITY_IDS.includes(a.id));
+    const classActivities = ACTIVITIES.filter(a => !BASIC_ACTIVITY_IDS.includes(a.id));
 
-    // Gerar Diárias (3 quests)
+    // Determinar quantas de cada tipo baseada na classe
+    const isBasicClass = currentClass === 'NPC' || currentClass === 'Aventureiro';
+    const numBasicDaily = isBasicClass ? 3 : 2;
+    const numClassDaily = isBasicClass ? 0 : 1;
+
+    // --- GERAR DIÁRIAS ---
     if (!lastDaily || lastDaily < todayStart) {
-        // Remover diarias antigas
         newQuests = newQuests.filter(q => q.type !== 'daily');
         
-        // Selecionar 3 atividades aleatorias
-        const shuffled = [...ACTIVITIES].sort(() => 0.5 - Math.random());
-        const selected = shuffled.slice(0, 3);
+        const shuffledBasic = [...basicActivities].sort(() => 0.5 - Math.random());
+        const selectedDaily = shuffledBasic.slice(0, numBasicDaily);
         
-        selected.forEach(act => {
-            // Meta simplificada baseada no tipo ou um valor padrao razoavel
+        if (numClassDaily > 0) {
+            // Tentar pegar uma atividade que combine com a classe se possível (simplificado para random do pool de classe por enquanto)
+            const shuffledClass = [...classActivities].sort(() => 0.5 - Math.random());
+            if (shuffledClass.length > 0) selectedDaily.push(shuffledClass[0]);
+        }
+
+        selectedDaily.forEach(act => {
             let target = 1;
-            if (act.unit === 'km') target = Math.floor(Math.random() * 3) + 2; // 2-4 km
-            if (act.unit === 'reps') target = Math.floor(Math.random() * 20) + 10; // 10-30 reps
+            // Metas Diárias
+            if (act.unit === 'km') target = Math.floor(Math.random() * 2) + 2; // 2-3 km
+            if (act.unit === 'reps') target = Math.floor(Math.random() * 15) + 15; // 15-30 reps
             if (act.unit === 'min') target = Math.floor(Math.random() * 15) + 15; // 15-30 min
-            if (act.unit === 'copos') target = 4;
-            if (act.unit === 'pág/min') target = 10;
+            if (act.unit === 'copos') target = 6;
+            if (act.unit === 'pág/min') target = 15;
 
             newQuests.push({
                 id: `daily-${Date.now()}-${act.id}`,
@@ -246,7 +260,7 @@ export default function App() {
                 activityId: act.id,
                 targetAmount: target,
                 currentAmount: 0,
-                xpReward: Math.floor(target * act.xpPerUnit * 1.5), // Bonus de 50%
+                xpReward: Math.floor(target * act.xpPerUnit * 1.5),
                 isClaimed: false,
                 createdAt: Date.now()
             });
@@ -254,29 +268,38 @@ export default function App() {
         newLastDaily = Date.now();
     }
 
-    // Gerar Semanais (2 quests)
+    // --- GERAR SEMANAIS ---
     if (!lastWeekly || lastWeekly < weekStart) {
-        // Remover semanais antigas
         newQuests = newQuests.filter(q => q.type !== 'weekly');
 
-        const shuffled = [...ACTIVITIES].sort(() => 0.5 - Math.random());
-        const selected = shuffled.slice(0, 2);
+        // Para semanal, usamos a mesma lógica de seleção (Básico + Classe)
+        const shuffledBasic = [...basicActivities].sort(() => 0.5 - Math.random());
+        const selectedWeekly = shuffledBasic.slice(0, numBasicDaily);
+        
+        if (numClassDaily > 0) {
+            const shuffledClass = [...classActivities].sort(() => 0.5 - Math.random());
+            if (shuffledClass.length > 0) selectedWeekly.push(shuffledClass[0]);
+        }
 
-        selected.forEach(act => {
-            let target = 5;
-            if (act.unit === 'km') target = Math.floor(Math.random() * 10) + 10; // 10-20 km
-            if (act.unit === 'reps') target = Math.floor(Math.random() * 50) + 50; // 50-100 reps
-            if (act.unit === 'min') target = Math.floor(Math.random() * 60) + 60; // 60-120 min
-            if (act.unit === 'copos') target = 30;
-            if (act.unit === 'pág/min') target = 50;
+        selectedWeekly.forEach(act => {
+             // Definir Meta Diária Base
+            let dailyBase = 1;
+            if (act.unit === 'km') dailyBase = 2;
+            if (act.unit === 'reps') dailyBase = 20; 
+            if (act.unit === 'min') dailyBase = 20;
+            if (act.unit === 'copos') dailyBase = 6;
+            if (act.unit === 'pág/min') dailyBase = 15;
+
+            // Meta Semanal = Diária x 7
+            const weeklyTarget = dailyBase * 7;
 
             newQuests.push({
                 id: `weekly-${Date.now()}-${act.id}`,
                 type: 'weekly',
                 activityId: act.id,
-                targetAmount: target,
+                targetAmount: weeklyTarget,
                 currentAmount: 0,
-                xpReward: Math.floor(target * act.xpPerUnit * 2.5), // Bonus de 150%
+                xpReward: Math.floor(weeklyTarget * act.xpPerUnit * 2.0), // Bonus de conclusão semanal
                 isClaimed: false,
                 createdAt: Date.now()
             });
@@ -296,11 +319,13 @@ export default function App() {
     if (savedGame) {
         const parsedGame = JSON.parse(savedGame);
         const safeAttributes = parsedGame.attributes || { STR: 0, END: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0 };
-        
+        const currentClass = parsedGame.classTitle || "NPC";
+
         // Inicializar com quests se nao tiver
         const initialQuests = parsedGame.quests || [];
         const { quests, lastDaily, lastWeekly } = generateNewQuests(
             initialQuests, 
+            currentClass,
             parsedGame.lastDailyQuestGen, 
             parsedGame.lastWeeklyQuestGen
         );
@@ -308,7 +333,7 @@ export default function App() {
         setGameState(prev => ({ 
             ...prev, 
             ...parsedGame,
-            classTitle: parsedGame.classTitle || "NPC",
+            classTitle: currentClass,
             attributes: safeAttributes,
             quests: quests,
             lastDailyQuestGen: lastDaily,
@@ -316,7 +341,7 @@ export default function App() {
         }));
     } else {
         // New game start
-        const { quests, lastDaily, lastWeekly } = generateNewQuests([], 0, 0);
+        const { quests, lastDaily, lastWeekly } = generateNewQuests([], "NPC", 0, 0);
         setGameState(prev => ({
             ...prev,
             quests,
@@ -350,8 +375,10 @@ export default function App() {
             
             // Checar quests ao carregar da nuvem tambem
             const cloudGame = cloudData.gameState;
+            const currentClass = cloudGame.classTitle || "NPC";
             const { quests, lastDaily, lastWeekly } = generateNewQuests(
-                cloudGame.quests || [], 
+                cloudGame.quests || [],
+                currentClass,
                 cloudGame.lastDailyQuestGen, 
                 cloudGame.lastWeeklyQuestGen
             );

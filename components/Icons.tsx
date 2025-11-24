@@ -1,4 +1,5 @@
 
+
 import React from 'react';
 import { 
   Footprints, 
@@ -33,7 +34,8 @@ import {
   Scroll,
   Gift,
   CheckCircle,
-  Lock
+  Lock,
+  ArrowBigUp
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -52,6 +54,7 @@ export const getIcon = (name: string, className?: string) => {
     case 'Plus': return <Plus {...props} />;
     case 'Moon': return <Moon {...props} />;
     case 'Clock': return <Clock {...props} />;
+    case 'ArrowBigUp': return <ArrowBigUp {...props} />;
     
     // Class Icons
     case 'Wind': return <Wind {...props} />;
