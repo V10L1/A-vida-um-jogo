@@ -169,7 +169,7 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-6 bg-slate-900">
+      <div className="min-h-screen flex items-center justify-center p-6 bg-green-900">
         <div className="w-full max-w-md space-y-8">
           <div className="text-center">
             <h1 className="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
@@ -208,7 +208,7 @@ export default function App() {
   const xpNeeded = calculateXpForNextLevel(gameState.level);
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white pb-24 md:pb-6 relative overflow-hidden">
+    <div className="min-h-screen bg-green-900 text-white pb-24 md:pb-6 relative overflow-hidden">
       
       {/* Level Up Overlay */}
       {showLevelUp && (

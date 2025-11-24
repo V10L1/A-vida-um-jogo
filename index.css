@@ -7,15 +7,15 @@
   width: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: #14532d;
 }
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #22c55e;
   border-radius: 3px;
 }
 
 body {
-  background-color: #0f172a;
+  background-color: #14532d;
   color: white;
   font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   margin: 0;
