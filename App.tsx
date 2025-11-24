@@ -1201,14 +1201,19 @@ export default function App() {
   const dailyQuests = gameState.quests.filter(q => q.type === 'daily');
   
   // Separar Quests Básicas (Sem atributo ou Sono) de Avançadas
+  // ORDENAÇÃO EXPLÍCITA: Sono vem primeiro
   const basicDailyQuests = dailyQuests.filter(q => {
       const act = ACTIVITIES.find(a => a.id === q.activityId);
       return q.activityId === 'sleep' || (act && !act.primaryAttribute);
+  }).sort((a, b) => {
+      if (a.activityId === 'sleep') return -1;
+      if (b.activityId === 'sleep') return 1;
+      return 0;
   });
   
   const advancedDailyQuests = dailyQuests.filter(q => {
       const act = ACTIVITIES.find(a => a.id === q.activityId);
-      return q.activityId !== 'sleep' && (act && act.primaryAttribute);
+      return q.activityId !== 'sleep' && (act && !!act.primaryAttribute);
   });
 
   const weeklyQuests = gameState.quests.filter(q => q.type === 'weekly');
@@ -1705,7 +1710,7 @@ export default function App() {
                     {/* Missões Básicas (Sem Atributos / Sono) */}
                     {basicDailyQuests.length > 0 && (
                         <div className="space-y-2">
-                            <h5 className="text-[10px] text-slate-500 uppercase font-bold pl-1">Missões Básicas</h5>
+                            <h5 className="text-[10px] text-slate-500 uppercase font-bold pl-1">Hábitos Essenciais</h5>
                             {basicDailyQuests.map(quest => {
                                 const act = ACTIVITIES.find(a => a.id === quest.activityId);
                                 const isComplete = quest.currentAmount >= quest.targetAmount;
@@ -1739,7 +1744,7 @@ export default function App() {
                     {/* Missões Avançadas (Com Atributos) */}
                     {advancedDailyQuests.length > 0 && (
                         <div className="space-y-2">
-                             <h5 className="text-[10px] text-slate-500 uppercase font-bold pl-1">Treino / Classe</h5>
+                             <h5 className="text-[10px] text-slate-500 uppercase font-bold pl-1">Treino & Classe</h5>
                              {advancedDailyQuests.map(quest => {
                                  const act = ACTIVITIES.find(a => a.id === quest.activityId);
                                  const isComplete = quest.currentAmount >= quest.targetAmount;
