@@ -50,6 +50,15 @@ export interface ActivityLog {
     distance?: number; // km
     duration?: string; // MM:SS
     pace?: string; // MM:SS /km
+    // Detalhes de Tiro
+    weapon?: 'curta' | 'longa' | 'espingarda' | 'rifle';
+    hits?: {
+        center: number;
+        contour1: number;
+        contour2: number;
+        contour3: number;
+        outer: number;
+    };
   };
 }
 
