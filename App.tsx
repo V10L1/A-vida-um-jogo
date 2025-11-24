@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType } from './types';
 import { getIcon } from './components/Icons';
 import { generateRpgFlavorText, generateClassTitle } from './services/geminiService';
+import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud } from './firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
 
 // --- Helper Components ---
 
@@ -54,25 +56,88 @@ export default function App() {
   const [narratorText, setNarratorText] = useState<string>("Bem-vindo ao LifeRPG. Comece sua jornada!");
   const [loadingAi, setLoadingAi] = useState(false);
   const [showLevelUp, setShowLevelUp] = useState(false);
+  
+  // Auth State
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Constants
   const XP_FOR_NEXT_LEVEL_BASE = 100;
   
-  // Effects
+  // Initialize & Auth Listener
   useEffect(() => {
+    // 1. Carregar local primeiro para ser rápido
     const savedUser = localStorage.getItem('liferpg_user');
     const savedGame = localStorage.getItem('liferpg_game');
     
     if (savedUser) setUser(JSON.parse(savedUser));
     if (savedGame) setGameState(JSON.parse(savedGame));
+
+    // 2. Configurar listener do Firebase
+    if (auth) {
+      const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+        setCurrentUser(firebaseUser);
+        if (firebaseUser) {
+          // Se logou, tenta baixar dados da nuvem
+          setIsSyncing(true);
+          const cloudData = await loadUserDataFromCloud(firebaseUser.uid);
+          if (cloudData) {
+            // Se tem dados na nuvem, usa eles (Prioridade para Nuvem)
+            setUser(cloudData.userProfile);
+            setGameState(cloudData.gameState);
+            setNarratorText("Sincronização completa. Bem-vindo de volta, herói!");
+          } else {
+            // Se não tem dados na nuvem, mas tem local, sobe os dados locais
+            if (savedUser && savedGame) {
+              await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
+            }
+          }
+          setIsSyncing(false);
+        }
+      });
+      return () => unsubscribe();
+    }
   }, []);
 
+  // Save Effect (Local + Cloud)
   useEffect(() => {
-    if (user) localStorage.setItem('liferpg_user', JSON.stringify(user));
-    if (gameState) localStorage.setItem('liferpg_game', JSON.stringify(gameState));
-  }, [user, gameState]);
+    if (user) {
+      localStorage.setItem('liferpg_user', JSON.stringify(user));
+      // Save to cloud if logged in
+      if (currentUser && gameState) {
+        saveUserDataToCloud(currentUser.uid, user, gameState);
+      }
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (gameState) {
+      localStorage.setItem('liferpg_game', JSON.stringify(gameState));
+      // Save to cloud if logged in
+      if (currentUser && user) {
+         saveUserDataToCloud(currentUser.uid, user, gameState);
+      }
+    }
+  }, [gameState]);
+
 
   // Logic
+  const handleGoogleLogin = async () => {
+    try {
+      await loginWithGoogle();
+    } catch (e) {
+      alert("Erro ao conectar com Google");
+    }
+  };
+
+  const handleLogout = async () => {
+    await logoutUser();
+    // Opcional: Limpar dados locais ao sair?
+    // setUser(null); 
+    // setGameState(...);
+    // Por enquanto, mantemos os dados locais para permitir uso offline
+  };
+
   const calculateXpForNextLevel = (level: number) => {
     // Linear scaling: Level 1 needs 100, Level 2 needs 200, etc.
     return level * XP_FOR_NEXT_LEVEL_BASE;
@@ -200,6 +265,17 @@ export default function App() {
               Iniciar Aventura
             </button>
           </form>
+          {/* Login option for restoration */}
+           <div className="text-center pt-4">
+              <p className="text-slate-500 text-sm mb-2">Já tem uma conta?</p>
+              <button 
+                onClick={handleGoogleLogin}
+                className="text-blue-400 hover:text-blue-300 text-sm font-semibold flex items-center justify-center gap-2 w-full"
+              >
+                {getIcon("User", "w-4 h-4")}
+                Recuperar Progresso com Google
+              </button>
+           </div>
         </div>
       </div>
     );
@@ -229,13 +305,34 @@ export default function App() {
                 {user.name.charAt(0).toUpperCase()}
               </div>
               <div>
-                <h1 className="font-bold text-lg">{user.name}</h1>
+                <h1 className="font-bold text-lg leading-tight">{user.name}</h1>
                 <p className="text-xs text-blue-400 font-medium tracking-wider uppercase">{gameState.classTitle}</p>
               </div>
             </div>
-            <div className="text-right">
-              <div className="text-3xl font-black text-yellow-400 drop-shadow-sm">{gameState.level}</div>
-              <div className="text-xs text-slate-400 uppercase tracking-widest">Nível</div>
+            
+            <div className="flex flex-col items-end gap-1">
+               {/* Cloud Save Button */}
+               {currentUser ? (
+                  <button 
+                    onClick={handleLogout}
+                    className="text-[10px] bg-emerald-900/50 text-emerald-400 border border-emerald-800 px-2 py-1 rounded flex items-center gap-1 hover:bg-emerald-900 transition-colors"
+                  >
+                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+                    Salvo
+                  </button>
+               ) : (
+                  <button 
+                    onClick={handleGoogleLogin}
+                    className="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-1 rounded flex items-center gap-1 hover:text-white hover:border-slate-500 transition-colors"
+                  >
+                    ☁️ Salvar
+                  </button>
+               )}
+               
+               <div className="text-right">
+                <div className="text-3xl font-black text-yellow-400 drop-shadow-sm leading-none">{gameState.level}</div>
+                <div className="text-[10px] text-slate-500 uppercase tracking-widest">Nível</div>
+               </div>
             </div>
           </div>
           
@@ -268,6 +365,7 @@ export default function App() {
                  "{narratorText}"
                </p>
                {loadingAi && <span className="text-xs text-blue-500 animate-pulse mt-1 block">O Mestre está pensando...</span>}
+               {isSyncing && <span className="text-xs text-emerald-500 mt-1 block">Sincronizando com os arquivos sagrados...</span>}
              </div>
           </div>
         </div>
