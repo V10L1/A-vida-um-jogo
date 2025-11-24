@@ -1,5 +1,3 @@
-
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS } from './types';
 import { getIcon } from './components/Icons';
@@ -225,12 +223,46 @@ export default function App() {
     
     // Separar Pools de Atividade
     const basicActivities = ACTIVITIES.filter(a => BASIC_ACTIVITY_IDS.includes(a.id));
-    const classActivities = ACTIVITIES.filter(a => !BASIC_ACTIVITY_IDS.includes(a.id));
+    const allClassActivities = ACTIVITIES.filter(a => !BASIC_ACTIVITY_IDS.includes(a.id));
 
-    // Determinar quantas de cada tipo baseada na classe
+    // Determinar atividades de classe baseadas no arquétipo do jogador
+    let filteredClassActivities = allClassActivities;
+    
+    // Filtro Inteligente de Classes
+    if (currentClass.includes('Mago')) {
+        filteredClassActivities = allClassActivities.filter(a => a.category === 'intellect');
+    } else if (currentClass.includes('Healer') || currentClass.includes('Conselheiro')) {
+        filteredClassActivities = allClassActivities.filter(a => a.category === 'social');
+    } else if (['Bodybuilder', 'Tanque', 'Lutador', 'Berseker'].some(c => currentClass.includes(c))) {
+        filteredClassActivities = allClassActivities.filter(a => a.primaryAttribute === 'STR' || a.category === 'combat' || a.id === 'gym');
+    } else if (['Corredor', 'Biker', 'Velocista'].some(c => currentClass.includes(c))) {
+        filteredClassActivities = allClassActivities.filter(a => a.primaryAttribute === 'END' || a.id === 'bike' || a.id === 'hiit');
+    } else if (['Atirador', 'Pistoleiro', 'Espadachim'].some(c => currentClass.includes(c))) {
+        filteredClassActivities = allClassActivities.filter(a => a.primaryAttribute === 'DEX' || a.category === 'combat');
+    }
+
+    // Se o filtro for muito restrito e não tiver nada, usa o geral
+    if (filteredClassActivities.length === 0) filteredClassActivities = allClassActivities;
+
+    // Determinar quantidade baseada na classe
     const isBasicClass = currentClass === 'NPC' || currentClass === 'Aventureiro';
     const numBasicDaily = isBasicClass ? 3 : 2;
     const numClassDaily = isBasicClass ? 0 : 1;
+
+    // Helper para calcular alvo baseado na unidade
+    const getTarget = (act: ActivityType, type: 'daily' | 'weekly') => {
+        let dailyBase = 1;
+        if (act.unit === 'km') dailyBase = 3;
+        if (act.unit === 'reps') dailyBase = 20;
+        if (act.unit === 'min') dailyBase = 20;
+        if (act.unit === 'copos') dailyBase = 6;
+        if (act.unit === 'pág/min') dailyBase = 15;
+        if (act.unit === 'sessão') dailyBase = 1;
+        if (act.unit === 'ação') dailyBase = 1;
+
+        if (type === 'weekly') return dailyBase * 7;
+        return dailyBase;
+    };
 
     // --- GERAR DIÁRIAS ---
     if (!lastDaily || lastDaily < todayStart) {
@@ -240,27 +272,19 @@ export default function App() {
         const selectedDaily = shuffledBasic.slice(0, numBasicDaily);
         
         if (numClassDaily > 0) {
-            // Tentar pegar uma atividade que combine com a classe se possível (simplificado para random do pool de classe por enquanto)
-            const shuffledClass = [...classActivities].sort(() => 0.5 - Math.random());
+            const shuffledClass = [...filteredClassActivities].sort(() => 0.5 - Math.random());
             if (shuffledClass.length > 0) selectedDaily.push(shuffledClass[0]);
         }
 
         selectedDaily.forEach(act => {
-            let target = 1;
-            // Metas Diárias
-            if (act.unit === 'km') target = Math.floor(Math.random() * 2) + 2; // 2-3 km
-            if (act.unit === 'reps') target = Math.floor(Math.random() * 15) + 15; // 15-30 reps
-            if (act.unit === 'min') target = Math.floor(Math.random() * 15) + 15; // 15-30 min
-            if (act.unit === 'copos') target = 6;
-            if (act.unit === 'pág/min') target = 15;
-
+            const target = getTarget(act, 'daily');
             newQuests.push({
                 id: `daily-${Date.now()}-${act.id}`,
                 type: 'daily',
                 activityId: act.id,
                 targetAmount: target,
                 currentAmount: 0,
-                xpReward: Math.floor(target * act.xpPerUnit * 1.5),
+                xpReward: Math.floor(target * act.xpPerUnit * 1.2),
                 isClaimed: false,
                 createdAt: Date.now()
             });
@@ -272,34 +296,24 @@ export default function App() {
     if (!lastWeekly || lastWeekly < weekStart) {
         newQuests = newQuests.filter(q => q.type !== 'weekly');
 
-        // Para semanal, usamos a mesma lógica de seleção (Básico + Classe)
+        // Usar lógica similar para selecionar as semanais
         const shuffledBasic = [...basicActivities].sort(() => 0.5 - Math.random());
         const selectedWeekly = shuffledBasic.slice(0, numBasicDaily);
         
         if (numClassDaily > 0) {
-            const shuffledClass = [...classActivities].sort(() => 0.5 - Math.random());
+            const shuffledClass = [...filteredClassActivities].sort(() => 0.5 - Math.random());
             if (shuffledClass.length > 0) selectedWeekly.push(shuffledClass[0]);
         }
 
         selectedWeekly.forEach(act => {
-             // Definir Meta Diária Base
-            let dailyBase = 1;
-            if (act.unit === 'km') dailyBase = 2;
-            if (act.unit === 'reps') dailyBase = 20; 
-            if (act.unit === 'min') dailyBase = 20;
-            if (act.unit === 'copos') dailyBase = 6;
-            if (act.unit === 'pág/min') dailyBase = 15;
-
-            // Meta Semanal = Diária x 7
-            const weeklyTarget = dailyBase * 7;
-
+            const target = getTarget(act, 'weekly');
             newQuests.push({
                 id: `weekly-${Date.now()}-${act.id}`,
                 type: 'weekly',
                 activityId: act.id,
-                targetAmount: weeklyTarget,
+                targetAmount: target,
                 currentAmount: 0,
-                xpReward: Math.floor(weeklyTarget * act.xpPerUnit * 2.0), // Bonus de conclusão semanal
+                xpReward: Math.floor(target * act.xpPerUnit * 2.0), // Bonus maior para semanal
                 isClaimed: false,
                 createdAt: Date.now()
             });
