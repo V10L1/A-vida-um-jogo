@@ -1,10 +1,9 @@
 import { GoogleGenAI } from "@google/genai";
 import { UserProfile, GameState } from "../types";
 
-// Initialize safely. If the key is empty (development/missing env), use a placeholder 
-// to prevent the constructor from crashing the app load. We check validity later.
-const apiKey = process.env.API_KEY || "missing_api_key_placeholder";
-const ai = new GoogleGenAI({ apiKey });
+// Initialize the Google GenAI SDK with the API key from the environment.
+// The API key is guaranteed to be available via process.env.API_KEY.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
 
 // --- Offline/Fallback Data ---
 
@@ -41,7 +40,7 @@ export const generateRpgFlavorText = async (
   gameState: GameState,
   latestActivity?: string
 ): Promise<string> => {
-  // Check if the key is valid (not empty and not our placeholder)
+  // Check if the key is valid (not empty) to fallback to offline mode gracefully
   const hasValidKey = process.env.API_KEY && process.env.API_KEY.length > 10;
 
   if (!hasValidKey) {

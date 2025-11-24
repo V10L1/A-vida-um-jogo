@@ -4,13 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>LifeRPG</title>
+    <!-- Data URI Favicon to prevent 404 errors without needing an external file -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E⚔️%3C/text%3E%3C/svg%3E" />
-    <link rel="shortcut icon" href="#" />
+    
+    <!-- Polyfill for process.env to prevent crashes in browser environment -->
     <script>
-      // Polyfill simple para evitar "process is not defined" em navegadores antigos ou configurações parciais
-      window.process = { env: {} };
+      window.process = { 
+        env: { 
+          NODE_ENV: 'development',
+          API_KEY: '' 
+        } 
+      };
     </script>
-<script type="importmap">
+  <script type="importmap">
 {
   "imports": {
     "react": "https://aistudiocdn.com/react@^19.2.0",
