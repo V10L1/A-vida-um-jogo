@@ -13,7 +13,15 @@ export interface UserProfile {
 }
 
 // Novos Atributos de RPG
-export type Attribute = 'STR' | 'END' | 'AGI' | 'DEX' | 'INT' | 'CHA';
+// STR: Força Bruta (Low Reps)
+// END: Resistência Muscular (High Reps)
+// VIG: Fôlego/Cardio (Novo)
+// AGI: Velocidade
+// DEX: Coordenação
+// INT: Mente
+// CHA: Social
+// DRV: Direção
+export type Attribute = 'STR' | 'END' | 'VIG' | 'AGI' | 'DEX' | 'INT' | 'CHA' | 'DRV';
 
 export interface ActivityType {
   id: string;
@@ -118,11 +126,13 @@ export const RPG_CLASSES = [
 
 export const ATTRIBUTE_LABELS: Record<Attribute, string> = {
     STR: 'Força',
-    END: 'Resistência',
+    END: 'Resist. Muscular',
+    VIG: 'Vigor',
     AGI: 'Agilidade',
     DEX: 'Destreza',
     INT: 'Intelecto',
-    CHA: 'Carisma'
+    CHA: 'Carisma',
+    DRV: 'Volante'
 };
 
 // IDs das atividades básicas para lógica de Quests
@@ -130,19 +140,26 @@ export const BASIC_ACTIVITY_IDS = ['walk', 'run', 'pushup', 'abs', 'water'];
 
 export const ACTIVITIES: ActivityType[] = [
   // --- Atividades Básicas (Missões Diárias Padrão) ---
-  { id: 'walk', label: 'Caminhada Leve', xpPerUnit: 15, unit: 'km', icon: 'Footprints', category: 'fitness', primaryAttribute: 'END' },
-  { id: 'run', label: 'Corrida', xpPerUnit: 30, unit: 'km', icon: 'Wind', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'AGI' },
-  { id: 'pushup', label: 'Flexões', xpPerUnit: 2, unit: 'reps', icon: 'Dumbbell', category: 'fitness', primaryAttribute: 'STR' },
-  { id: 'abs', label: 'Abdominais', xpPerUnit: 2, unit: 'reps', icon: 'ArrowBigUp', category: 'fitness', primaryAttribute: 'STR', secondaryAttribute: 'END' },
+  // Cardio agora vai para VIG (Vigor) em vez de END
+  { id: 'walk', label: 'Caminhada Leve', xpPerUnit: 15, unit: 'km', icon: 'Footprints', category: 'fitness', primaryAttribute: 'VIG' },
+  { id: 'run', label: 'Corrida', xpPerUnit: 30, unit: 'km', icon: 'Wind', category: 'fitness', primaryAttribute: 'VIG', secondaryAttribute: 'AGI' },
+  
+  // Calistenia (High Reps) -> Foco em END (Resistência Muscular)
+  { id: 'pushup', label: 'Flexões', xpPerUnit: 2, unit: 'reps', icon: 'Dumbbell', category: 'fitness', primaryAttribute: 'STR', secondaryAttribute: 'END' },
+  { id: 'abs', label: 'Abdominais', xpPerUnit: 2, unit: 'reps', icon: 'ArrowBigUp', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'STR' },
   { id: 'squat', label: 'Agachamentos', xpPerUnit: 3, unit: 'reps', icon: 'ArrowBigUp', category: 'fitness', primaryAttribute: 'STR', secondaryAttribute: 'END' },
-  { id: 'water', label: 'Hidratação', xpPerUnit: 10, unit: 'copos', icon: 'Droplets', category: 'health', primaryAttribute: 'END' },
+  
+  { id: 'water', label: 'Hidratação', xpPerUnit: 10, unit: 'copos', icon: 'Droplets', category: 'health', primaryAttribute: 'VIG' },
 
   // --- Atividades Específicas / Classe ---
-  { id: 'bike', label: 'Ciclismo', xpPerUnit: 20, unit: 'km', icon: 'Bike', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'STR' },
+  { id: 'bike', label: 'Ciclismo', xpPerUnit: 20, unit: 'km', icon: 'Bike', category: 'fitness', primaryAttribute: 'VIG', secondaryAttribute: 'STR' },
+  
   // Gym xpPerUnit é base, mas será calculado dinamicamente pelo peso x reps
-  { id: 'gym', label: 'Musculação / Peso', xpPerUnit: 10, unit: 'série', icon: 'Biceps', category: 'fitness', primaryAttribute: 'STR' },
-  { id: 'hiit', label: 'HIIT / Cardio Intenso', xpPerUnit: 8, unit: 'min', icon: 'Flame', category: 'fitness', primaryAttribute: 'AGI', secondaryAttribute: 'END' },
-  { id: 'resistence', label: 'Treino de Resistência', xpPerUnit: 5, unit: 'min', icon: 'Shield', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'STR' },
+  // Atributos definidos dinamicamente no App.tsx
+  { id: 'gym', label: 'Musculação / Peso', xpPerUnit: 10, unit: 'série', icon: 'Biceps', category: 'fitness' },
+  
+  { id: 'hiit', label: 'HIIT / Cardio Intenso', xpPerUnit: 8, unit: 'min', icon: 'Flame', category: 'fitness', primaryAttribute: 'AGI', secondaryAttribute: 'VIG' },
+  { id: 'resistence', label: 'Treino de Resistência', xpPerUnit: 5, unit: 'min', icon: 'Shield', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'VIG' },
 
   // --- Combate ---
   { id: 'fight', label: 'Treino de Luta/Boxe', xpPerUnit: 10, unit: 'min', icon: 'Swords', category: 'combat', primaryAttribute: 'STR', secondaryAttribute: 'DEX' },
@@ -152,7 +169,7 @@ export const ACTIVITIES: ActivityType[] = [
 
   // --- Intelectual / Social / Outros ---
   { id: 'study', label: 'Estudo / Leitura', xpPerUnit: 5, unit: 'pág/min', icon: 'BookOpen', category: 'intellect', primaryAttribute: 'INT' },
-  { id: 'drive', label: 'Dirigir', xpPerUnit: 2, unit: 'km', icon: 'Car', category: 'intellect', primaryAttribute: 'DEX', secondaryAttribute: 'INT' },
+  { id: 'drive', label: 'Dirigir', xpPerUnit: 2, unit: 'km', icon: 'Car', category: 'intellect', primaryAttribute: 'DRV', secondaryAttribute: 'DEX' },
   { id: 'volunteer', label: 'Boa Ação / Ajuda', xpPerUnit: 150, unit: 'ação', icon: 'Heart', category: 'social', primaryAttribute: 'CHA', secondaryAttribute: 'INT' },
   { id: 'listen', label: 'Ouvir / Aconselhar', xpPerUnit: 10, unit: 'min', icon: 'Brain', category: 'social', primaryAttribute: 'CHA' },
 ];

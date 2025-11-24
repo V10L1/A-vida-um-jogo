@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember } from './types';
 import { getIcon } from './components/Icons';
@@ -45,7 +46,7 @@ const RadarChart = ({ attributes }: { attributes: Record<Attribute, number> }) =
   const radius = (size / 2) - 40; // Padding
   
   // Ordem fixa para o gráfico ficar bonito
-  const attributeKeys: Attribute[] = ['STR', 'AGI', 'DEX', 'INT', 'CHA', 'END'];
+  const attributeKeys: Attribute[] = ['STR', 'AGI', 'DEX', 'DRV', 'INT', 'CHA', 'VIG', 'END'];
   
   // Encontrar o valor máximo para normalizar o gráfico (mínimo de 10)
   const values = attributeKeys.map(k => attributes[k] || 0);
@@ -178,7 +179,7 @@ export default function App() {
     totalXp: 0,
     logs: [],
     classTitle: "NPC",
-    attributes: { STR: 0, END: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0 }, 
+    attributes: { STR: 0, END: 0, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0 }, 
     activeBuff: null,
     quests: []
   });
@@ -313,7 +314,8 @@ export default function App() {
     } else if (['Bodybuilder', 'Tanque', 'Lutador', 'Berseker'].some(c => currentClass.includes(c))) {
         filteredClassActivities = allClassActivities.filter(a => a.primaryAttribute === 'STR' || a.category === 'combat' || a.id === 'gym');
     } else if (['Corredor', 'Biker', 'Velocista'].some(c => currentClass.includes(c))) {
-        filteredClassActivities = allClassActivities.filter(a => a.primaryAttribute === 'END' || a.id === 'bike' || a.id === 'hiit');
+        // Agora verifica VIG
+        filteredClassActivities = allClassActivities.filter(a => a.primaryAttribute === 'VIG' || a.id === 'bike' || a.id === 'hiit');
     } else if (['Atirador', 'Pistoleiro', 'Espadachim'].some(c => currentClass.includes(c))) {
         filteredClassActivities = allClassActivities.filter(a => a.primaryAttribute === 'DEX' || a.category === 'combat');
     }
@@ -411,7 +413,11 @@ export default function App() {
     if (savedUser) setUser(JSON.parse(savedUser));
     if (savedGame) {
         const parsedGame = JSON.parse(savedGame);
-        const safeAttributes = parsedGame.attributes || { STR: 0, END: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0 };
+        // Fallback robusto para garantir que DRV e VIG existam em saves antigos
+        const safeAttributes = {
+             STR: 0, END: 0, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0,
+             ...parsedGame.attributes
+        };
         const currentClass = parsedGame.classTitle || "NPC";
 
         const initialQuests = parsedGame.quests || [];
@@ -468,8 +474,6 @@ export default function App() {
         if (firebaseUser) {
           setIsSyncing(true);
           
-          // IMPORTANT: If we have pending local changes (needsSync), DO NOT overwrite with cloud data.
-          // Instead, upload local data to cloud.
           if (needsSync && savedUser && savedGame) {
               console.log("Local changes detected. Syncing UP to cloud instead of DOWN.");
               const success = await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
@@ -479,12 +483,15 @@ export default function App() {
               }
               setIsSyncing(false);
           } else {
-              // Standard Load: Cloud -> Local
               const cloudData = await loadUserDataFromCloud(firebaseUser.uid);
               if (cloudData) {
                 setUser(cloudData.userProfile);
                 
                 const cloudGame = cloudData.gameState;
+                const safeAttributes = {
+                    STR: 0, END: 0, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0,
+                    ...cloudGame.attributes
+                };
                 const currentClass = cloudGame.classTitle || "NPC";
                 const { quests, lastDaily, lastWeekly } = generateNewQuests(
                     cloudGame.quests || [],
@@ -496,6 +503,7 @@ export default function App() {
                 setGameState(prev => ({ 
                     ...prev, 
                     ...cloudGame,
+                    attributes: safeAttributes,
                     quests,
                     lastDailyQuestGen: lastDaily,
                     lastWeeklyQuestGen: lastWeekly
@@ -510,7 +518,6 @@ export default function App() {
 
                 setNarratorText("Sincronização completa. Bem-vindo de volta, herói!");
               } else {
-                  // New User in DB but exists locally
                   if (savedUser && savedGame) {
                       await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
                   } else {
@@ -528,7 +535,6 @@ export default function App() {
   useEffect(() => {
     if (user) {
       localStorage.setItem('liferpg_user', JSON.stringify(user));
-      // Save trigger is handled in GameState effect usually, but for profile updates:
       if (currentUser && gameState) {
           saveUserDataToCloud(currentUser.uid, user, gameState).then((success) => {
               if (!success) localStorage.setItem('liferpg_needs_sync', 'true');
@@ -541,7 +547,6 @@ export default function App() {
     if (gameState) {
       localStorage.setItem('liferpg_game', JSON.stringify(gameState));
       if (currentUser && user) {
-          // Attempt to save to cloud. If it fails (offline), mark dirty.
           saveUserDataToCloud(currentUser.uid, user, gameState).then((success) => {
               if (!success) {
                   console.log("Offline or Save Failed. Marking for Sync.");
@@ -627,15 +632,19 @@ export default function App() {
 
       switch (maxAttr) {
           case 'STR': // Força Dominante
-              if (isSecondaryRelevant && secondMaxAttr === 'END') return "Tanque";
+              if (isSecondaryRelevant && secondMaxAttr === 'END') return "Tanque"; // Força + Resistência Muscular
               if (isSecondaryRelevant && secondMaxAttr === 'DEX') return "Lutador";
               if (isSecondaryRelevant && secondMaxAttr === 'AGI') return "Berseker";
               return "Bodybuilder";
           
-          case 'END': // Resistência Dominante
+          case 'VIG': // Vigor Dominante (Cardio) - Antigo END
               if (isSecondaryRelevant && secondMaxAttr === 'STR') return "Biker"; 
               if (isSecondaryRelevant && secondMaxAttr === 'AGI') return "Corredor"; // Ou Triatleta
               return "Corredor";
+
+          case 'END': // Resistência Muscular Dominante
+               if (isSecondaryRelevant && secondMaxAttr === 'STR') return "Crossfitter"; // Alta Repetição + Força
+               return "Atleta de Resistência";
 
           case 'AGI': // Agilidade Dominante
               if (isSecondaryRelevant && secondMaxAttr === 'DEX') return "Espadachim"; // Rapidez + Técnica
@@ -644,7 +653,6 @@ export default function App() {
           case 'DEX': // Destreza Dominante
               if (isSecondaryRelevant && secondMaxAttr === 'STR') return "Lutador";
               if (isSecondaryRelevant && secondMaxAttr === 'AGI') return "Espadachim";
-              if (isSecondaryRelevant && secondMaxAttr === 'INT') return "Motorista";
               return "Atirador";
 
           case 'INT': // Intelecto Dominante
@@ -653,6 +661,9 @@ export default function App() {
           case 'CHA': // Carisma Dominante
               if (isSecondaryRelevant && secondMaxAttr === 'INT') return "Conselheiro";
               return "Healer";
+
+          case 'DRV': // Perícia Volante Dominante
+              return "Motorista";
           
           default:
               return "Aventureiro";
@@ -748,17 +759,21 @@ export default function App() {
     let xpGained = 0;
     let details: ActivityLog['details'] | undefined = undefined;
 
-    // Lógica para Musculação
+    const newAttributes = { ...gameState.attributes };
+
+    // --- Lógica Especial para Musculação ---
     if (selectedActivity.id === 'gym') {
         const weight = Number(gymWeight) || 0;
         const reps = Number(gymReps) || 0;
         if (reps <= 0) return;
 
         amount = 1; // 1 série
-        // XP Formula: (Peso * Reps * 0.05) + 5 base
+        
+        // XP baseado em Volume Load (Peso * Reps)
         // Se for peso do corpo (0kg), considera como se fosse 10kg para não zerar
         const effectiveWeight = weight > 0 ? weight : 10;
-        xpGained = Math.floor((effectiveWeight * reps * 0.05) + 5);
+        // Fórmula de XP: Volume / 5. Ex: 30kg * 12reps = 360 vol / 5 = 72 XP.
+        xpGained = Math.floor((effectiveWeight * reps) / 5) + 5; 
 
         details = {
             exercise: gymExercise || 'Exercício',
@@ -766,6 +781,24 @@ export default function App() {
             reps: reps,
             restTime: 0 // Será tratado pelo timer visual
         };
+
+        // --- Distribuição de Atributos Baseada em Faixas de Repetição ---
+        // Pontos ganhos são proporcionais ao XP, mas escalados para não inflacionar os atributos demais
+        const attributePoints = Math.ceil(xpGained / 5);
+
+        if (reps <= 6) {
+            // Força Bruta (STR)
+            newAttributes.STR = (newAttributes.STR || 0) + attributePoints;
+            newAttributes.END = (newAttributes.END || 0) + Math.ceil(attributePoints * 0.5);
+        } else if (reps >= 7 && reps <= 9) {
+            // Híbrido (70% cada)
+            newAttributes.STR = (newAttributes.STR || 0) + Math.ceil(attributePoints * 0.7);
+            newAttributes.END = (newAttributes.END || 0) + Math.ceil(attributePoints * 0.7);
+        } else {
+            // Resistência Muscular (END) - Reps >= 10
+            newAttributes.END = (newAttributes.END || 0) + attributePoints;
+            newAttributes.STR = (newAttributes.STR || 0) + Math.ceil(attributePoints * 0.5);
+        }
 
         // Iniciar timer
         const [mins, secs] = gymRestTime.split(':').map(Number);
@@ -775,10 +808,18 @@ export default function App() {
             setIsResting(true);
         }
     } else {
-        // Lógica Padrão
+        // Lógica Padrão para outras atividades
         if (!inputAmount || isNaN(Number(inputAmount))) return;
         amount = Number(inputAmount);
         xpGained = Math.floor(amount * selectedActivity.xpPerUnit);
+
+        let pointsEarned = Math.ceil(amount);
+        if (selectedActivity.primaryAttribute) {
+            newAttributes[selectedActivity.primaryAttribute] = (newAttributes[selectedActivity.primaryAttribute] || 0) + pointsEarned;
+        }
+        if (selectedActivity.secondaryAttribute) {
+            newAttributes[selectedActivity.secondaryAttribute] = (newAttributes[selectedActivity.secondaryAttribute] || 0) + Math.ceil(pointsEarned * 0.5);
+        }
     }
 
     let buffApplied = false;
@@ -810,23 +851,6 @@ export default function App() {
       newLevel++;
       xpNeeded = calculateXpForNextLevel(newLevel);
       leveledUp = true;
-    }
-
-    // --- Atualizar Atributos ---
-    const newAttributes = { ...gameState.attributes };
-    let pointsEarned = Math.ceil(amount);
-    
-    // Ajuste de pontos para Gym
-    if (selectedActivity.id === 'gym') {
-        // Ganha mais STR baseado na carga
-        pointsEarned = Math.ceil(xpGained / 10);
-    }
-
-    if (selectedActivity.primaryAttribute) {
-        newAttributes[selectedActivity.primaryAttribute] = (newAttributes[selectedActivity.primaryAttribute] || 0) + pointsEarned;
-    }
-    if (selectedActivity.secondaryAttribute) {
-        newAttributes[selectedActivity.secondaryAttribute] = (newAttributes[selectedActivity.secondaryAttribute] || 0) + Math.ceil(pointsEarned * 0.5);
     }
 
     // --- Atualizar Quests ---
@@ -1315,7 +1339,7 @@ export default function App() {
              <div className="space-y-4">
                  <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex items-center gap-3 mb-4">
                      <div className="p-2 bg-slate-900 rounded-full text-blue-400">{getIcon("Biceps")}</div>
-                     <div className="text-sm text-slate-300">Registre sua série. O XP é calculado pela carga total.</div>
+                     <div className="text-sm text-slate-300">Registre sua série. Pontos: <br/> ≤6 reps (Força) • 7-9 (Híbrido) • ≥10 (Resistência)</div>
                  </div>
                  
                  <div>
