@@ -1105,7 +1105,17 @@ export default function App() {
                      {authView === 'register' && (
                         <div>
                             <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Confirmar Senha</label>
-                            <input type="password" value={authConfirmPassword} onChange={e => setAuthConfirmPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="******" />
+                            <input 
+                                type="password" 
+                                value={authConfirmPassword} 
+                                onChange={e => setAuthConfirmPassword(e.target.value)} 
+                                required 
+                                className={`w-full bg-slate-950 border rounded-lg p-3 text-white focus:ring-2 outline-none ${authPassword && authConfirmPassword && authPassword !== authConfirmPassword ? 'border-red-500 focus:ring-red-500' : 'border-slate-700 focus:ring-blue-500'}`} 
+                                placeholder="******" 
+                            />
+                            {authPassword && authConfirmPassword && authPassword !== authConfirmPassword && (
+                                <p className="text-red-500 text-xs mt-1 font-bold">As senhas não conferem!</p>
+                            )}
                         </div>
                      )}
                      <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors">
