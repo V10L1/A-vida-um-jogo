@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { 
   Footprints, 
@@ -28,7 +29,11 @@ import {
   Pencil,
   Save,
   X,
-  Camera
+  Camera,
+  Scroll,
+  Gift,
+  CheckCircle,
+  Lock
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -67,6 +72,12 @@ export const getIcon = (name: string, className?: string) => {
     case 'Save': return <Save {...props} />;
     case 'X': return <X {...props} />;
     case 'Camera': return <Camera {...props} />;
+    
+    // Quest Icons
+    case 'Scroll': return <Scroll {...props} />;
+    case 'Gift': return <Gift {...props} />;
+    case 'CheckCircle': return <CheckCircle {...props} />;
+    case 'Lock': return <Lock {...props} />;
     
     default: return <Activity {...props} />;
   }

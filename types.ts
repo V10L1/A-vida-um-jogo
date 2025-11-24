@@ -40,6 +40,17 @@ export interface XpBuff {
   description: string;
 }
 
+export interface Quest {
+  id: string;
+  type: 'daily' | 'weekly';
+  activityId: string; // Qual atividade precisa ser feita
+  targetAmount: number; // Meta (ex: 5km, 100 flexoes)
+  currentAmount: number; // Progresso atual
+  xpReward: number; // Recompensa em XP
+  isClaimed: boolean; // Se ja pegou o premio
+  createdAt: number; // Para saber quando expira
+}
+
 export interface GameState {
   level: number;
   currentXp: number;
@@ -48,6 +59,9 @@ export interface GameState {
   classTitle: string; 
   attributes: Record<Attribute, number>; // Pontos de Atributo (Força, Agilidade, etc)
   activeBuff?: XpBuff | null;
+  quests: Quest[]; // Lista de missoes ativas
+  lastDailyQuestGen?: number; // Data da ultima geracao diaria
+  lastWeeklyQuestGen?: number; // Data da ultima geracao semanal
 }
 
 // Lista de Classes para Display (Lógica é calculada dinamicamente)

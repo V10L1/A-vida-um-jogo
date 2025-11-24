@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS } from './types';
+import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest } from './types';
 import { getIcon } from './components/Icons';
 import { generateRpgFlavorText } from './services/geminiService';
 import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult } from './firebase';
@@ -179,12 +180,14 @@ export default function App() {
     logs: [],
     classTitle: "NPC",
     attributes: { STR: 0, END: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0 }, 
-    activeBuff: null
+    activeBuff: null,
+    quests: []
   });
   const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
   const [isSleepModalOpen, setIsSleepModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [isQuestModalOpen, setIsQuestModalOpen] = useState(false);
 
   const [selectedActivity, setSelectedActivity] = useState<ActivityType | null>(null);
   const [inputAmount, setInputAmount] = useState('');
@@ -206,6 +209,84 @@ export default function App() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   
+  // Helper para gerar quests aleatorias
+  const generateNewQuests = (currentQuests: Quest[], lastDaily?: number, lastWeekly?: number): { quests: Quest[], lastDaily: number, lastWeekly: number } => {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    // Inicio da semana (Domingo)
+    const day = now.getDay();
+    const diff = now.getDate() - day;
+    const weekStart = new Date(now.setDate(diff)).setHours(0,0,0,0);
+
+    let newQuests = [...currentQuests];
+    let newLastDaily = lastDaily || 0;
+    let newLastWeekly = lastWeekly || 0;
+
+    // Gerar Diárias (3 quests)
+    if (!lastDaily || lastDaily < todayStart) {
+        // Remover diarias antigas
+        newQuests = newQuests.filter(q => q.type !== 'daily');
+        
+        // Selecionar 3 atividades aleatorias
+        const shuffled = [...ACTIVITIES].sort(() => 0.5 - Math.random());
+        const selected = shuffled.slice(0, 3);
+        
+        selected.forEach(act => {
+            // Meta simplificada baseada no tipo ou um valor padrao razoavel
+            let target = 1;
+            if (act.unit === 'km') target = Math.floor(Math.random() * 3) + 2; // 2-4 km
+            if (act.unit === 'reps') target = Math.floor(Math.random() * 20) + 10; // 10-30 reps
+            if (act.unit === 'min') target = Math.floor(Math.random() * 15) + 15; // 15-30 min
+            if (act.unit === 'copos') target = 4;
+            if (act.unit === 'pág/min') target = 10;
+
+            newQuests.push({
+                id: `daily-${Date.now()}-${act.id}`,
+                type: 'daily',
+                activityId: act.id,
+                targetAmount: target,
+                currentAmount: 0,
+                xpReward: Math.floor(target * act.xpPerUnit * 1.5), // Bonus de 50%
+                isClaimed: false,
+                createdAt: Date.now()
+            });
+        });
+        newLastDaily = Date.now();
+    }
+
+    // Gerar Semanais (2 quests)
+    if (!lastWeekly || lastWeekly < weekStart) {
+        // Remover semanais antigas
+        newQuests = newQuests.filter(q => q.type !== 'weekly');
+
+        const shuffled = [...ACTIVITIES].sort(() => 0.5 - Math.random());
+        const selected = shuffled.slice(0, 2);
+
+        selected.forEach(act => {
+            let target = 5;
+            if (act.unit === 'km') target = Math.floor(Math.random() * 10) + 10; // 10-20 km
+            if (act.unit === 'reps') target = Math.floor(Math.random() * 50) + 50; // 50-100 reps
+            if (act.unit === 'min') target = Math.floor(Math.random() * 60) + 60; // 60-120 min
+            if (act.unit === 'copos') target = 30;
+            if (act.unit === 'pág/min') target = 50;
+
+            newQuests.push({
+                id: `weekly-${Date.now()}-${act.id}`,
+                type: 'weekly',
+                activityId: act.id,
+                targetAmount: target,
+                currentAmount: 0,
+                xpReward: Math.floor(target * act.xpPerUnit * 2.5), // Bonus de 150%
+                isClaimed: false,
+                createdAt: Date.now()
+            });
+        });
+        newLastWeekly = Date.now();
+    }
+
+    return { quests: newQuests, lastDaily: newLastDaily, lastWeekly: newLastWeekly };
+  };
+
   // Initialize & Auth Listener
   useEffect(() => {
     const savedUser = localStorage.getItem('liferpg_user');
@@ -214,13 +295,33 @@ export default function App() {
     if (savedUser) setUser(JSON.parse(savedUser));
     if (savedGame) {
         const parsedGame = JSON.parse(savedGame);
-        // Migração de dados antigos para novos atributos se necessario
         const safeAttributes = parsedGame.attributes || { STR: 0, END: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0 };
+        
+        // Inicializar com quests se nao tiver
+        const initialQuests = parsedGame.quests || [];
+        const { quests, lastDaily, lastWeekly } = generateNewQuests(
+            initialQuests, 
+            parsedGame.lastDailyQuestGen, 
+            parsedGame.lastWeeklyQuestGen
+        );
+
         setGameState(prev => ({ 
             ...prev, 
             ...parsedGame,
             classTitle: parsedGame.classTitle || "NPC",
-            attributes: safeAttributes
+            attributes: safeAttributes,
+            quests: quests,
+            lastDailyQuestGen: lastDaily,
+            lastWeeklyQuestGen: lastWeekly
+        }));
+    } else {
+        // New game start
+        const { quests, lastDaily, lastWeekly } = generateNewQuests([], 0, 0);
+        setGameState(prev => ({
+            ...prev,
+            quests,
+            lastDailyQuestGen: lastDaily,
+            lastWeeklyQuestGen: lastWeekly
         }));
     }
 
@@ -246,7 +347,23 @@ export default function App() {
           const cloudData = await loadUserDataFromCloud(firebaseUser.uid);
           if (cloudData) {
             setUser(cloudData.userProfile);
-            setGameState(prev => ({ ...prev, ...cloudData.gameState })); 
+            
+            // Checar quests ao carregar da nuvem tambem
+            const cloudGame = cloudData.gameState;
+            const { quests, lastDaily, lastWeekly } = generateNewQuests(
+                cloudGame.quests || [], 
+                cloudGame.lastDailyQuestGen, 
+                cloudGame.lastWeeklyQuestGen
+            );
+
+            setGameState(prev => ({ 
+                ...prev, 
+                ...cloudGame,
+                quests,
+                lastDailyQuestGen: lastDaily,
+                lastWeeklyQuestGen: lastWeekly
+            })); 
+
             setNarratorText("Sincronização completa. Bem-vindo de volta, herói!");
           } else if (savedUser && savedGame) {
               await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
@@ -465,15 +582,25 @@ export default function App() {
 
     // --- Atualizar Atributos ---
     const newAttributes = { ...gameState.attributes };
-    const pointsEarned = Math.ceil(amount); // 1 ponto por unidade (km, min, rep)
+    const pointsEarned = Math.ceil(amount);
     
     if (selectedActivity.primaryAttribute) {
         newAttributes[selectedActivity.primaryAttribute] = (newAttributes[selectedActivity.primaryAttribute] || 0) + pointsEarned;
     }
-    // Secundário ganha metade
     if (selectedActivity.secondaryAttribute) {
         newAttributes[selectedActivity.secondaryAttribute] = (newAttributes[selectedActivity.secondaryAttribute] || 0) + Math.ceil(pointsEarned * 0.5);
     }
+
+    // --- Atualizar Quests ---
+    const updatedQuests = gameState.quests.map(q => {
+        if (!q.isClaimed && q.activityId === selectedActivity.id) {
+            return {
+                ...q,
+                currentAmount: q.currentAmount + amount
+            };
+        }
+        return q;
+    });
 
     const newClassTitle = determineClass(newAttributes);
 
@@ -489,7 +616,8 @@ export default function App() {
       logs: [newLog, ...gameState.logs].slice(0, 50),
       attributes: newAttributes,
       classTitle: newClassTitle,
-      activeBuff: activeBuff
+      activeBuff: activeBuff,
+      quests: updatedQuests
     };
 
     setGameState(newState);
@@ -504,6 +632,44 @@ export default function App() {
     } else {
       updateNarrator(user!, newState, selectedActivity.label + (buffApplied ? " (Buffado)" : ""));
     }
+  };
+
+  const handleClaimQuest = (questId: string) => {
+      const quest = gameState.quests.find(q => q.id === questId);
+      if (!quest || quest.isClaimed || quest.currentAmount < quest.targetAmount) return;
+
+      const xpGained = quest.xpReward;
+      let newCurrentXp = gameState.currentXp + xpGained;
+      let newTotalXp = gameState.totalXp + xpGained;
+      let newLevel = gameState.level;
+      let leveledUp = false;
+
+      let xpNeeded = calculateXpForNextLevel(newLevel);
+      while (newCurrentXp >= xpNeeded) {
+        newCurrentXp -= xpNeeded;
+        newLevel++;
+        xpNeeded = calculateXpForNextLevel(newLevel);
+        leveledUp = true;
+      }
+
+      const updatedQuests = gameState.quests.map(q => 
+        q.id === questId ? { ...q, isClaimed: true } : q
+      );
+
+      const newState = {
+          ...gameState,
+          level: newLevel,
+          currentXp: newCurrentXp,
+          totalXp: newTotalXp,
+          quests: updatedQuests
+      };
+
+      setGameState(newState);
+      if (leveledUp) {
+          setShowLevelUp(true);
+          setTimeout(() => setShowLevelUp(false), 5000);
+      }
+      setNarratorText("Recompensa de missão coletada!");
   };
 
   const handleRegisterSleep = () => {
@@ -573,6 +739,11 @@ export default function App() {
   const isBuffActive = gameState.activeBuff && Date.now() < gameState.activeBuff.expiresAt;
   const buffPercentage = isBuffActive ? Math.round((gameState.activeBuff!.multiplier - 1) * 100) : 0;
   const xpNeeded = calculateXpForNextLevel(gameState.level);
+
+  // Filter Quests
+  const dailyQuests = gameState.quests.filter(q => q.type === 'daily');
+  const weeklyQuests = gameState.quests.filter(q => q.type === 'weekly');
+  const unclaimedQuestsCount = gameState.quests.filter(q => q.currentAmount >= q.targetAmount && !q.isClaimed).length;
 
   if (!user) {
     // ... (Login Screen remains same)
@@ -656,11 +827,17 @@ export default function App() {
             </div>
             
             <div className="flex flex-col items-end gap-1">
-               {currentUser ? (
-                  <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-emerald-900/50 text-emerald-400 border border-emerald-800 px-2 py-1 rounded flex items-center gap-1 hover:bg-emerald-900 transition-colors"><div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>Salvo</button>
-               ) : (
-                  <button onClick={(e) => { e.stopPropagation(); handleGoogleLogin(); }} className="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-1 rounded flex items-center gap-1 hover:text-white hover:border-slate-500 transition-colors">☁️ Salvar</button>
-               )}
+               <div className="flex gap-2">
+                   <button onClick={(e) => { e.stopPropagation(); setIsQuestModalOpen(true); }} className="relative text-[10px] bg-amber-900/40 text-amber-400 border border-amber-700/50 px-2 py-1 rounded flex items-center gap-1 hover:bg-amber-900/60 transition-colors">
+                        {getIcon("Scroll", "w-3 h-3")} Quests
+                        {unclaimedQuestsCount > 0 && <span className="absolute -top-1 -right-1 flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
+                   </button>
+                   {currentUser ? (
+                      <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-emerald-900/50 text-emerald-400 border border-emerald-800 px-2 py-1 rounded flex items-center gap-1 hover:bg-emerald-900 transition-colors"><div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>Salvo</button>
+                   ) : (
+                      <button onClick={(e) => { e.stopPropagation(); handleGoogleLogin(); }} className="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-1 rounded flex items-center gap-1 hover:text-white hover:border-slate-500 transition-colors">☁️ Salvar</button>
+                   )}
+               </div>
                <div className="text-right">
                 <div className="text-3xl font-black text-yellow-400 drop-shadow-sm leading-none">{gameState.level}</div>
                 <div className="text-[10px] text-slate-500 uppercase tracking-widest">Nível</div>
@@ -794,6 +971,73 @@ export default function App() {
               <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Acordou às</label><input type="time" value={wakeTime} onChange={(e) => setWakeTime(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"/></div>
            </div>
            <button onClick={handleRegisterSleep} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-indigo-900/20">{getIcon("Moon", "w-5 h-5")} Registrar Descanso</button>
+        </div>
+      </Modal>
+
+      {/* Quest Modal */}
+      <Modal isOpen={isQuestModalOpen} onClose={() => setIsQuestModalOpen(false)} title="Quests e Contratos">
+        <div className="space-y-6">
+             {/* Daily Section */}
+             <div>
+                <h4 className="text-amber-400 font-bold uppercase text-xs tracking-widest mb-2 flex items-center gap-2">{getIcon("Scroll", "w-4 h-4")} Diárias</h4>
+                <div className="space-y-3">
+                    {dailyQuests.map(quest => {
+                         const act = ACTIVITIES.find(a => a.id === quest.activityId);
+                         const isComplete = quest.currentAmount >= quest.targetAmount;
+                         return (
+                            <div key={quest.id} className={`p-3 rounded-lg border flex flex-col gap-2 ${isComplete ? 'bg-emerald-900/20 border-emerald-700' : 'bg-slate-800 border-slate-700'}`}>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm font-semibold text-slate-200">{act?.label}</span>
+                                    <span className="text-xs text-amber-400 font-bold">+{quest.xpReward} XP</span>
+                                </div>
+                                <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
+                                    <div className="bg-amber-500 h-full transition-all" style={{ width: `${Math.min(100, (quest.currentAmount / quest.targetAmount) * 100)}%` }}></div>
+                                </div>
+                                <div className="flex justify-between items-center text-xs text-slate-400">
+                                    <span>{quest.currentAmount} / {quest.targetAmount} {act?.unit}</span>
+                                    {isComplete && !quest.isClaimed && (
+                                        <button onClick={() => handleClaimQuest(quest.id)} className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded animate-pulse">
+                                            Resgatar
+                                        </button>
+                                    )}
+                                    {quest.isClaimed && <span className="text-emerald-500 font-bold flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Completo</span>}
+                                </div>
+                            </div>
+                         );
+                    })}
+                </div>
+             </div>
+             
+             {/* Weekly Section */}
+             <div>
+                <h4 className="text-purple-400 font-bold uppercase text-xs tracking-widest mb-2 flex items-center gap-2">{getIcon("Trophy", "w-4 h-4")} Semanais</h4>
+                <div className="space-y-3">
+                    {weeklyQuests.map(quest => {
+                         const act = ACTIVITIES.find(a => a.id === quest.activityId);
+                         const isComplete = quest.currentAmount >= quest.targetAmount;
+                         return (
+                            <div key={quest.id} className={`p-3 rounded-lg border flex flex-col gap-2 ${isComplete ? 'bg-emerald-900/20 border-emerald-700' : 'bg-slate-800 border-slate-700'}`}>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm font-semibold text-slate-200">{act?.label}</span>
+                                    <span className="text-xs text-purple-400 font-bold">+{quest.xpReward} XP</span>
+                                </div>
+                                <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
+                                    <div className="bg-purple-500 h-full transition-all" style={{ width: `${Math.min(100, (quest.currentAmount / quest.targetAmount) * 100)}%` }}></div>
+                                </div>
+                                <div className="flex justify-between items-center text-xs text-slate-400">
+                                    <span>{quest.currentAmount} / {quest.targetAmount} {act?.unit}</span>
+                                    {isComplete && !quest.isClaimed && (
+                                        <button onClick={() => handleClaimQuest(quest.id)} className="px-3 py-1 bg-purple-500 hover:bg-purple-400 text-white font-bold rounded animate-pulse">
+                                            Resgatar
+                                        </button>
+                                    )}
+                                    {quest.isClaimed && <span className="text-emerald-500 font-bold flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Completo</span>}
+                                </div>
+                            </div>
+                         );
+                    })}
+                </div>
+             </div>
         </div>
       </Modal>
 
