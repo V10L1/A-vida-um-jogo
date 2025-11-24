@@ -153,7 +153,7 @@ export const ACTIVITIES: ActivityType[] = [
   { id: 'squat', label: 'Agachamentos', xpPerUnit: 3, unit: 'reps', icon: 'ArrowBigUp', category: 'fitness', primaryAttribute: 'STR', secondaryAttribute: 'END' },
   
   // Hidratacao nao da pontos de atributo, apenas XP geral
-  { id: 'water', label: 'Hidratação', xpPerUnit: 10, unit: 'copos', icon: 'Droplets', category: 'health' },
+  { id: 'water', label: 'Hidratação', xpPerUnit: 10, unit: 'copos (250ml)', icon: 'Droplets', category: 'health' },
 
   // --- Atividades Específicas / Classe ---
   { id: 'bike', label: 'Ciclismo', xpPerUnit: 20, unit: 'km', icon: 'Bike', category: 'fitness', primaryAttribute: 'VIG', secondaryAttribute: 'STR' },
