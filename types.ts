@@ -16,7 +16,7 @@ export interface ActivityType {
   unit: string;
   icon: string;
   category: 'fitness' | 'intellect' | 'health' | 'combat' | 'social';
-  relatedClass?: string; // Classe que ganha pontos com isso
+  relatedClass?: string; // Classe que ganha pontos com isso. Se undefined, é atividade básica.
 }
 
 export interface ActivityLog {
@@ -43,24 +43,36 @@ export interface GameState {
   activeBuff?: XpBuff | null;
 }
 
-// Lista expandida para cobrir as classes solicitadas
+// Lista de Classes Oficiais para o Gráfico
+export const RPG_CLASSES = [
+  'Corredor', 'Biker', 'Lutador', 'Tanque', 
+  'Berseker', 'Bodybuilder', 'Espadachim', 'Healer', 
+  'Atirador', 'Pistoleiro', 'Conselheiro', 'Mago'
+];
+
 export const ACTIVITIES: ActivityType[] = [
   // --- Atividades Básicas (Sem Classe) ---
-  { id: 'walk', label: 'Caminhada', xpPerUnit: 15, unit: 'km', icon: 'Footprints', category: 'fitness' },
-  { id: 'pushup', label: 'Flexões', xpPerUnit: 2, unit: 'reps', icon: 'Dumbbell', category: 'fitness' },
-  { id: 'water', label: 'Beber Água', xpPerUnit: 10, unit: 'copos (250ml)', icon: 'Droplets', category: 'health' },
+  { id: 'walk', label: 'Caminhada Leve', xpPerUnit: 15, unit: 'km', icon: 'Footprints', category: 'fitness' },
+  { id: 'pushup', label: 'Flexões Diárias', xpPerUnit: 2, unit: 'reps', icon: 'Dumbbell', category: 'fitness' },
+  { id: 'water', label: 'Hidratação', xpPerUnit: 10, unit: 'copos', icon: 'Droplets', category: 'health' },
 
-  // --- Atividades de Classe ---
-  { id: 'run', label: 'Corrida', xpPerUnit: 25, unit: 'km', icon: 'Wind', category: 'fitness', relatedClass: 'Corredor' },
+  // --- Atividades Principais / Classes ---
+  
+  // Fitness / Força
+  { id: 'run', label: 'Corrida', xpPerUnit: 30, unit: 'km', icon: 'Wind', category: 'fitness', relatedClass: 'Corredor' },
   { id: 'bike', label: 'Ciclismo', xpPerUnit: 20, unit: 'km', icon: 'Bike', category: 'fitness', relatedClass: 'Biker' },
-  { id: 'fight', label: 'Artes Marciais', xpPerUnit: 5, unit: 'min', icon: 'Swords', category: 'combat', relatedClass: 'Lutador' },
-  { id: 'core', label: 'Treino de Core/Resistência', xpPerUnit: 3, unit: 'min', icon: 'Shield', category: 'fitness', relatedClass: 'Tanque' },
-  { id: 'hiit', label: 'HIIT / Crossfit', xpPerUnit: 6, unit: 'min', icon: 'Flame', category: 'fitness', relatedClass: 'Berseker' },
-  { id: 'gym', label: 'Musculação (Pesos)', xpPerUnit: 50, unit: 'treino', icon: 'Biceps', category: 'fitness', relatedClass: 'Bodybuilder' },
-  { id: 'fencing', label: 'Esgrima / Kendo', xpPerUnit: 5, unit: 'min', icon: 'Sword', category: 'combat', relatedClass: 'Espadachim' },
-  { id: 'volunteer', label: 'Voluntariado / Ajuda', xpPerUnit: 100, unit: 'ação', icon: 'Heart', category: 'social', relatedClass: 'Healer' },
-  { id: 'archery', label: 'Tiro ao Alvo / Arco', xpPerUnit: 30, unit: 'sessão', icon: 'Crosshair', category: 'combat', relatedClass: 'Atirador' },
-  { id: 'reflex', label: 'Treino de Reflexo / FPS', xpPerUnit: 15, unit: 'sessão', icon: 'Target', category: 'combat', relatedClass: 'Pistoleiro' },
-  { id: 'meditate', label: 'Meditação / Aconselhamento', xpPerUnit: 2, unit: 'minutos', icon: 'Brain', category: 'health', relatedClass: 'Conselheiro' },
-  { id: 'read', label: 'Leitura / Estudo', xpPerUnit: 5, unit: 'páginas', icon: 'BookOpen', category: 'intellect', relatedClass: 'Mago' },
+  { id: 'gym', label: 'Musculação / Peso', xpPerUnit: 50, unit: 'treino', icon: 'Biceps', category: 'fitness', relatedClass: 'Bodybuilder' },
+  { id: 'hiit', label: 'HIIT / Cardio Intenso', xpPerUnit: 8, unit: 'min', icon: 'Flame', category: 'fitness', relatedClass: 'Berseker' },
+  { id: 'resistence', label: 'Treino de Resistência', xpPerUnit: 5, unit: 'min', icon: 'Shield', category: 'fitness', relatedClass: 'Tanque' },
+
+  // Combate / Destreza
+  { id: 'fight', label: 'Treino de Luta/Boxe', xpPerUnit: 10, unit: 'min', icon: 'Swords', category: 'combat', relatedClass: 'Lutador' },
+  { id: 'sword', label: 'Esgrima / Bastão', xpPerUnit: 10, unit: 'min', icon: 'Sword', category: 'combat', relatedClass: 'Espadachim' },
+  { id: 'archery', label: 'Arco e Flecha', xpPerUnit: 40, unit: 'sessão', icon: 'Crosshair', category: 'combat', relatedClass: 'Atirador' },
+  { id: 'shooting', label: 'Treino de Mira / Tiro', xpPerUnit: 20, unit: 'sessão', icon: 'Target', category: 'combat', relatedClass: 'Pistoleiro' },
+
+  // Intelecto / Social / Suporte
+  { id: 'study', label: 'Estudo / Leitura', xpPerUnit: 5, unit: 'pág/min', icon: 'BookOpen', category: 'intellect', relatedClass: 'Mago' },
+  { id: 'volunteer', label: 'Boa Ação / Ajuda', xpPerUnit: 150, unit: 'ação', icon: 'Heart', category: 'social', relatedClass: 'Healer' },
+  { id: 'listen', label: 'Ouvir / Aconselhar', xpPerUnit: 10, unit: 'min', icon: 'Brain', category: 'social', relatedClass: 'Conselheiro' },
 ];
