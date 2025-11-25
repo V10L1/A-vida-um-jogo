@@ -203,6 +203,9 @@ export default function App() {
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [isQuestModalOpen, setIsQuestModalOpen] = useState(false);
   const [isGuildModalOpen, setIsGuildModalOpen] = useState(false);
+  
+  // Profile Summary State
+  const [summaryDate, setSummaryDate] = useState(new Date());
 
   const [selectedActivity, setSelectedActivity] = useState<ActivityType | null>(null);
   const [inputAmount, setInputAmount] = useState('');
@@ -285,6 +288,53 @@ export default function App() {
         return bLogs[0].timestamp - aLogs[0].timestamp; // Descending
     });
   }, [gameState.logs]);
+
+  // --- Daily Summary Logic ---
+  const dailySummary = useMemo(() => {
+    const targetDate = summaryDate.toDateString();
+    
+    // 1. Filtrar logs do dia selecionado
+    const logsForDay = gameState.logs.filter(log => new Date(log.timestamp).toDateString() === targetDate);
+    
+    // 2. Calcular XP total
+    const totalXp = logsForDay.reduce((acc, log) => acc + log.xpGained, 0);
+
+    // 3. Agrupar por atividade para exibição compacta
+    const summaryList: { activity: ActivityType, count: number, totalAmount: number, details: string[] }[] = [];
+    
+    logsForDay.forEach(log => {
+        const act = ACTIVITIES.find(a => a.id === log.activityId);
+        if (!act) return;
+        
+        const existing = summaryList.find(s => s.activity.id === act.id);
+        let detailStr = "";
+        
+        if (log.details?.exercise) detailStr = `${log.details.exercise} (${log.details.weight}kg)`;
+        else if (log.details?.distance) detailStr = `${log.details.distance}km`;
+        else if (log.details?.weapon) detailStr = log.details.weapon;
+        
+        if (existing) {
+            existing.count += 1;
+            existing.totalAmount += log.amount;
+            if (detailStr) existing.details.push(detailStr);
+        } else {
+            summaryList.push({
+                activity: act,
+                count: 1,
+                totalAmount: log.amount,
+                details: detailStr ? [detailStr] : []
+            });
+        }
+    });
+
+    return { totalXp, list: summaryList, count: logsForDay.length };
+  }, [gameState.logs, summaryDate]);
+
+  const changeSummaryDate = (days: number) => {
+      const newDate = new Date(summaryDate);
+      newDate.setDate(newDate.getDate() + days);
+      setSummaryDate(newDate);
+  };
 
   // --- Connectivity Listeners ---
   useEffect(() => {
@@ -2142,7 +2192,7 @@ export default function App() {
                                             {quest.isClaimed && <span className="text-emerald-500 font-bold flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Completo</span>}
                                         </div>
                                     </div>
-                                );
+                                 );
                             })}
                         </div>
                     )}
@@ -2424,7 +2474,7 @@ export default function App() {
                 <RadarChart attributes={gameState.attributes} />
              </div>
 
-             <div className="grid grid-cols-2 w-full gap-4 text-center">
+             <div className="grid grid-cols-2 w-full gap-4 text-center mb-6">
                  <div className="bg-slate-800 p-3 rounded-lg">
                     <div className="text-xs text-slate-500 uppercase">XP Total</div>
                     <div className="text-xl font-bold text-white">{gameState.totalXp}</div>
@@ -2434,6 +2484,53 @@ export default function App() {
                     <div className="text-xl font-bold text-white">{gameState.logs.length}</div>
                  </div>
              </div>
+
+             {/* Daily Summary Section */}
+             <div className="w-full bg-slate-800/40 rounded-xl border border-slate-700 p-4">
+                 <div className="flex items-center justify-between mb-4">
+                     <button onClick={() => changeSummaryDate(-1)} className="p-1 hover:bg-slate-700 rounded text-slate-400">{getIcon("ChevronLeft")}</button>
+                     <div className="flex items-center gap-2 text-sm font-bold text-white uppercase tracking-wider">
+                         {getIcon("Calendar", "w-4 h-4 text-blue-400")}
+                         {summaryDate.toLocaleDateString()}
+                     </div>
+                     <button onClick={() => changeSummaryDate(1)} className="p-1 hover:bg-slate-700 rounded text-slate-400">{getIcon("ChevronRight")}</button>
+                 </div>
+
+                 {dailySummary.count > 0 ? (
+                     <div className="space-y-3">
+                         <div className="text-center mb-3">
+                             <span className="text-xs text-slate-500 uppercase font-bold">XP do Dia</span>
+                             <div className="text-xl font-bold text-emerald-400">+{dailySummary.totalXp} XP</div>
+                         </div>
+                         <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                             {dailySummary.list.map((item, idx) => (
+                                 <div key={idx} className="flex justify-between items-start bg-slate-900/50 p-2 rounded text-xs">
+                                     <div>
+                                         <div className="font-bold text-slate-300 flex items-center gap-2">
+                                            {getIcon(item.activity.icon, "w-3 h-3 text-slate-500")}
+                                            {item.activity.label} <span className="text-slate-600">x{item.count}</span>
+                                         </div>
+                                         {item.details.length > 0 && (
+                                             <div className="text-[10px] text-slate-500 mt-1 pl-5">
+                                                 {item.details.slice(0, 3).join(", ")}
+                                                 {item.details.length > 3 && "..."}
+                                             </div>
+                                         )}
+                                     </div>
+                                     <div className="text-slate-400">
+                                         {item.totalAmount} {item.activity.unit}
+                                     </div>
+                                 </div>
+                             ))}
+                         </div>
+                     </div>
+                 ) : (
+                     <div className="text-center py-6 text-slate-500 text-xs italic">
+                         Nenhum registro neste dia.
+                     </div>
+                 )}
+             </div>
+
           </div>
       </Modal>
 

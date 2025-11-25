@@ -11,6 +11,8 @@ import {
   User,
   Activity,
   ChevronRight,
+  ChevronLeft, // New
+  Calendar, // New
   Plus,
   Moon,
   Clock,
@@ -65,6 +67,8 @@ export const getIcon = (name: string, className?: string) => {
     case 'User': return <User {...props} />;
     case 'Activity': return <Activity {...props} />;
     case 'ChevronRight': return <ChevronRight {...props} />;
+    case 'ChevronLeft': return <ChevronLeft {...props} />; // New
+    case 'Calendar': return <Calendar {...props} />; // New
     case 'Plus': return <Plus {...props} />;
     case 'Moon': return <Moon {...props} />;
     case 'Clock': return <Clock {...props} />;
@@ -91,7 +95,7 @@ export const getIcon = (name: string, className?: string) => {
     case 'Pencil': return <Pencil {...props} />;
     case 'Save': return <Save {...props} />;
     case 'X': return <X {...props} />;
-    case 'Trash': return <Trash2 {...props} />; // Mapped Trash to Trash2
+    case 'Trash': return <Trash2 {...props} />; 
     case 'Camera': return <Camera {...props} />;
     case 'Timer': return <Timer {...props} />;
     case 'Play': return <Play {...props} />;
@@ -103,7 +107,7 @@ export const getIcon = (name: string, className?: string) => {
     case 'Gift': return <Gift {...props} />;
     case 'CheckCircle': return <CheckCircle {...props} />;
     case 'Lock': return <Lock {...props} />;
-    case 'Shield': return <Shield {...props} />; // Guild use Shield too
+    // case 'Shield': return <Shield {...props} />; // Duplicated in switch, removed comment
     case 'Skull': return <Skull {...props} />;
     case 'MessageSquare': return <MessageSquare {...props} />;
     case 'Crown': return <Crown {...props} />;
