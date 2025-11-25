@@ -1,8 +1,7 @@
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember } from './types';
 import { getIcon } from './components/Icons';
-import { generateRpgFlavorText } from './services/geminiService';
+import { generateRpgFlavorText, NarratorTrigger } from './services/geminiService';
 import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 
@@ -259,6 +258,7 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const timerIntervalRef = useRef<number | null>(null);
+  const hasNarratorRunRef = useRef(false);
 
   // Constants
   const XP_FOR_NEXT_LEVEL_BASE = 100;
@@ -614,7 +614,8 @@ export default function App() {
           } else {
               const cloudData = await loadUserDataFromCloud(firebaseUser.uid);
               if (cloudData) {
-                setUser(cloudData.userProfile);
+                const u = cloudData.userProfile;
+                setUser(u);
                 
                 const cloudGame = cloudData.gameState;
                 const safeAttributes = {
@@ -629,14 +630,15 @@ export default function App() {
                     cloudGame.lastWeeklyQuestGen
                 );
 
-                setGameState(prev => ({ 
-                    ...prev, 
+                const newState = { 
+                    ...prev => ({ ...prev }), // placeholder, we replace whole state
                     ...cloudGame,
                     attributes: safeAttributes,
                     quests,
                     lastDailyQuestGen: lastDaily,
                     lastWeeklyQuestGen: lastWeekly
-                })); 
+                };
+                setGameState(newState); 
 
                 if (cloudGame.guildId) {
                     subscribeToGuild(cloudGame.guildId, (guild, messages) => {
@@ -645,15 +647,16 @@ export default function App() {
                     });
                 }
 
-                setNarratorText("Sincronização completa. Bem-vindo de volta, herói!");
+                // --- NARRATOR LOGIN TRIGGER ---
+                // Only trigger once per session load
+                if (!hasNarratorRunRef.current) {
+                    hasNarratorRunRef.current = true;
+                    updateNarrator(u, newState, undefined, 'login');
+                }
+
               } else {
                   if (savedUser && savedGame) {
                       await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
-                  } else {
-                      // New user from cloud perspective, but maybe they just registered?
-                      // If so, handleRegister handled the data. 
-                      // If this is a fresh login with no data, we might need onboarding?
-                      // The merged flow handles this at registration time.
                   }
               }
               setIsSyncing(false);
@@ -768,8 +771,8 @@ export default function App() {
           
           await saveUserDataToCloud(firebaseUser.uid, newUser, newGameState);
           
-          // 6. Narrador
-          updateNarrator(newUser, newGameState, undefined, true);
+          // 6. Narrador Login (First Time)
+          updateNarrator(newUser, newGameState, undefined, 'login');
 
       } catch (e: any) {
           let msg = e.message;
@@ -957,21 +960,17 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  const updateNarrator = async (u: UserProfile, g: GameState, activityName?: string, isInit = false) => {
+  const updateNarrator = async (u: UserProfile, g: GameState, activityName?: string, trigger: NarratorTrigger = 'activity') => {
     if (!isOnline) {
-        if (isInit) setNarratorText("Bem-vindo ao modo offline. Sua jornada continua!");
+        if (trigger === 'login') setNarratorText("Bem-vindo ao modo offline. Sua jornada continua!");
         else setNarratorText("Atividade registrada localmente.");
         return;
     }
     
     setLoadingAi(true);
     try {
-      if (isInit) {
-          setNarratorText(`Bem-vindo, ${u.name}. Sua vida como ${u.profession} ficou para trás. Agora você é um ${g.classTitle}!`);
-      } else {
-          const text = await generateRpgFlavorText(u, g, activityName);
-          setNarratorText(text);
-      }
+      const text = await generateRpgFlavorText(u, g, trigger, activityName);
+      setNarratorText(text);
     } catch (err) {
       console.error(err);
     } finally {
@@ -1289,14 +1288,14 @@ export default function App() {
     if (leveledUp) {
       setShowLevelUp(true);
       setTimeout(() => setShowLevelUp(false), 5000);
-      updateNarrator(user!, newState, "LEVEL UP");
+      updateNarrator(user!, newState, "LEVEL UP", 'level_up');
     } else {
         if (selectedActivity.id !== 'gym') {
-             updateNarrator(user!, newState, selectedActivity.label + (buffApplied ? " (Buffado)" : ""));
+             updateNarrator(user!, newState, selectedActivity.label + (buffApplied ? " (Buffado)" : ""), 'activity');
         }
     }
   };
-
+//... (Resto do componente mantido)
   const handleDeleteLog = (logId: string) => {
     if (!window.confirm("Tem certeza que deseja excluir este registro? Os pontos e XP serão removidos.")) return;
 
