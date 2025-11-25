@@ -23,9 +23,9 @@ export const generateRpgFlavorText = async (
 
     if (trigger === 'login') {
         if (!lastLog) {
-            contextNote = "O usuário é novo. Dê as boas vindas épicas.";
+            contextNote = "O usuário é novo. Dê as boas vindas ao caminho da evolução.";
         } else if (hoursSinceLastActivity > 48) {
-            contextNote = `O usuário não registra nada há ${Math.floor(hoursSinceLastActivity / 24)} dias. O tom deve ser de alerta, como se a armadura estivesse enferrujando ou os monstros se aproximando. Cobrança sutil.`;
+            contextNote = `O usuário não registra nada há ${Math.floor(hoursSinceLastActivity / 24)} dias. O tom deve ser de alerta realista: "Seus músculos estão atrofiando", "Sua técnica está enferrujando", "Seu conhecimento está desvanecendo", "A inércia está vencendo".`;
         } else if (hoursSinceLastActivity < 24) {
             contextNote = "O usuário treinou recentemente (hoje ou ontem). O tom deve ser de reconhecimento pela disciplina e constância.";
         }
@@ -41,15 +41,19 @@ export const generateRpgFlavorText = async (
             if (currentClass.includes("Corredor") && (act.id === 'run' || act.primaryAttribute === 'VIG')) isClassSynergy = true;
             
             if (isClassSynergy) {
-                contextNote = `A atividade (${activityName}) é perfeita para a classe do usuário (${currentClass}). Elogie o foco na especialização.`;
+                if (currentClass.includes("Mago")) {
+                     contextNote = `A atividade (${activityName}) expande o Conhecimento e Foco mental do Mago. Elogie a mente afiada.`;
+                } else {
+                     contextNote = `A atividade (${activityName}) é fundamental para a classe ${currentClass}. Elogie a especialização.`;
+                }
             } else {
-                contextNote = `A atividade (${activityName}) é diferente do foco habitual da classe (${currentClass}). Elogie a versatilidade.`;
+                contextNote = `A atividade (${activityName}) é versátil para a classe (${currentClass}). Elogie o equilíbrio.`;
             }
         }
     }
 
     const prompt = `
-      Atue como um Mestre de RPG sábio e motivador (Narrador).
+      Atue como um Mestre de RPG da Vida Real (Narrador).
       
       Evento: ${trigger === 'login' ? 'Login do Jogador' : trigger === 'level_up' ? 'Subiu de Nível' : 'Atividade Completada'}
       ${activityName ? `Atividade: ${activityName}` : ''}
@@ -61,10 +65,13 @@ export const generateRpgFlavorText = async (
       
       Contexto Específico: ${contextNote}
       
+      Diretrizes de Tom Obrigatórias:
+      1. Substitua totalmente "Mana" por "Conhecimento", "Foco" ou "Capacidade Mental". Magos da vida real usam o cérebro.
+      2. Substitua monstros fantásticos por desafios reais: "Inércia", "Preguiça", "Limites", "Fraqueza", "Atrofia".
+      3. Seja motivador mas realista. Se o jogador não treina, avise que seus atributos vão cair.
+      4. Use termos de RPG (XP, Nível, Guilda, Quest) mas aplicados à realidade (ex: "Sua Stamina aumentou", "Seu Conhecimento expandiu").
+      
       Gere uma mensagem curta (máximo 2 frases) para o jogador.
-      Use metáforas de RPG (Mana, Stamina, XP, Dragões, Guildas, Equipamento).
-      Se for login após muito tempo, seja levemente severo ("Onde você estava?").
-      Se for login constante, seja orgulhoso.
       Não use Markdown. Apenas texto puro.
     `;
 
@@ -90,7 +97,7 @@ export const generateClassTitle = async (gameState: GameState): Promise<string> 
           XP Total: ${gameState.totalXp}
           Atributo Principal: ${Object.entries(gameState.attributes).sort((a,b) => b[1] - a[1])[0][0]}
           
-          Crie um Título de Classe criativo (ex: "Iniciado de Ferro", "Mestre do Movimento", "Sábio da Vitalidade").
+          Crie um Título de Classe criativo e realista (ex: "Erudito de Ferro", "Mestre do Movimento", "Sábio da Vitalidade").
           Apenas o título, nada mais. Máximo 4 palavras.
         `;
     
