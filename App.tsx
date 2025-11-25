@@ -1,5 +1,4 @@
 
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember } from './types';
 import { getIcon } from './components/Icons';
@@ -1219,6 +1218,129 @@ export default function App() {
     }
   };
 
+  const handleDeleteLog = (logId: string) => {
+    if (!window.confirm("Tem certeza que deseja excluir este registro? Os pontos e XP serão removidos.")) return;
+
+    const logToDelete = gameState.logs.find(l => l.id === logId);
+    if (!logToDelete || !user) return;
+
+    // 1. Remover XP
+    let newTotalXp = Math.max(0, gameState.totalXp - logToDelete.xpGained);
+    
+    // 2. Recalcular Nível
+    let newLevel = 1;
+    let xpAccumulator = 0;
+    let xpForNext = calculateXpForNextLevel(1);
+    while (xpAccumulator + xpForNext <= newTotalXp) {
+        xpAccumulator += xpForNext;
+        newLevel++;
+        xpForNext = calculateXpForNextLevel(newLevel);
+    }
+    let newCurrentXp = newTotalXp - xpAccumulator;
+
+    // 3. Reverter Atributos (Lógica Inversa)
+    const newAttributes = { ...gameState.attributes };
+    const act = ACTIVITIES.find(a => a.id === logToDelete.activityId);
+
+    if (act) {
+        if (act.id === 'gym' && logToDelete.details) {
+            const { reps, weight } = logToDelete.details;
+            const xp = logToDelete.xpGained; 
+            // Note: xpGained was calculated with floor/ceil logic, so we approximate the attribute points removal
+            const attrPoints = Math.ceil(xp / 5);
+            const r = reps || 0;
+
+            if (r <= 6) {
+                newAttributes.STR = Math.max(0, (newAttributes.STR || 0) - attrPoints);
+                newAttributes.END = Math.max(0, (newAttributes.END || 0) - Math.ceil(attrPoints * 0.5));
+            } else if (r >= 7 && r <= 9) {
+                newAttributes.STR = Math.max(0, (newAttributes.STR || 0) - Math.ceil(attrPoints * 0.7));
+                newAttributes.END = Math.max(0, (newAttributes.END || 0) - Math.ceil(attrPoints * 0.7));
+            } else {
+                newAttributes.END = Math.max(0, (newAttributes.END || 0) - attrPoints);
+                newAttributes.STR = Math.max(0, (newAttributes.STR || 0) - Math.ceil(attrPoints * 0.5));
+            }
+        } else if (act.id === 'run' && logToDelete.details) {
+            // Revert Run Logic
+            // We know xpGained. We need to estimate Pace Multiplier to revert attributes.
+            // But we have pointsEarned logic based on amount * multiplier.
+            // Let's use details to reconstruct multiplier.
+            const distance = logToDelete.amount;
+            const [m, s] = (logToDelete.details.duration || "0:00").split(':').map(Number);
+            const totalMin = (m||0) + ((s||0)/60);
+            const pace = distance > 0 ? totalMin/distance : 10;
+            
+            let paceMultiplier = 1;
+            if (pace <= 3.75) paceMultiplier = 1.5;
+            else if (pace <= 4.5) paceMultiplier = 1.2;
+            
+            const pointsEarned = Math.ceil(distance * paceMultiplier);
+            newAttributes.VIG = Math.max(0, (newAttributes.VIG || 0) - pointsEarned);
+
+            if (pace <= 4.5) newAttributes.AGI = Math.max(0, (newAttributes.AGI || 0) - Math.ceil(pointsEarned * 0.7));
+            else newAttributes.AGI = Math.max(0, (newAttributes.AGI || 0) - Math.ceil(pointsEarned * 0.3));
+
+        } else if (['shooting', 'archery', 'knife_throw'].includes(act.id)) {
+             const xp = logToDelete.xpGained;
+             const attrPoints = Math.ceil(xp / 3);
+             
+             if (act.id === 'shooting') {
+                 newAttributes.DEX = Math.max(0, (newAttributes.DEX || 0) - attrPoints);
+                 const tool = logToDelete.details?.weapon || '';
+                 if (tool === 'curta' || tool === 'longa') newAttributes.INT = Math.max(0, (newAttributes.INT || 0) - Math.ceil(attrPoints * 0.5));
+                 else newAttributes.STR = Math.max(0, (newAttributes.STR || 0) - Math.ceil(attrPoints * 0.5));
+             } else if (act.id === 'archery') {
+                 newAttributes.DEX = Math.max(0, (newAttributes.DEX || 0) - attrPoints);
+                 newAttributes.STR = Math.max(0, (newAttributes.STR || 0) - Math.ceil(attrPoints * 0.6));
+             } else if (act.id === 'knife_throw') {
+                 newAttributes.DEX = Math.max(0, (newAttributes.DEX || 0) - attrPoints);
+                 newAttributes.AGI = Math.max(0, (newAttributes.AGI || 0) - Math.ceil(attrPoints * 0.5));
+             }
+        } else {
+             // Standard Logic
+             let pointsEarned = Math.ceil(logToDelete.amount);
+             if (act.id === 'drive') pointsEarned = Math.floor(logToDelete.amount / 50);
+
+             if (act.primaryAttribute) {
+                 newAttributes[act.primaryAttribute] = Math.max(0, (newAttributes[act.primaryAttribute] || 0) - pointsEarned);
+             }
+             if (act.secondaryAttribute) {
+                 newAttributes[act.secondaryAttribute] = Math.max(0, (newAttributes[act.secondaryAttribute] || 0) - Math.ceil(pointsEarned * 0.5));
+             }
+        }
+    }
+
+    // 4. Reverter Progresso de Quest (Apenas se não foi coletada)
+    const updatedQuests = gameState.quests.map(q => {
+        if (!q.isClaimed && q.activityId === logToDelete.activityId) {
+            return {
+                ...q,
+                currentAmount: Math.max(0, q.currentAmount - logToDelete.amount)
+            };
+        }
+        return q;
+    });
+
+    // 5. Remover Log
+    const updatedLogs = gameState.logs.filter(l => l.id !== logId);
+    
+    // 6. Recalcular Classe
+    const newClassTitle = determineClass(newAttributes, user.weight, user.height, updatedLogs);
+
+    setGameState(prev => ({
+        ...prev,
+        level: newLevel,
+        currentXp: newCurrentXp,
+        totalXp: newTotalXp,
+        logs: updatedLogs,
+        attributes: newAttributes,
+        quests: updatedQuests,
+        classTitle: newClassTitle
+    }));
+
+    setNarratorText("Registro removido. O tempo volta atrás...");
+  };
+
   const handleClaimQuest = (questId: string) => {
       const quest = gameState.quests.find(q => q.id === questId);
       if (!quest || quest.isClaimed || quest.currentAmount < quest.targetAmount) return;
@@ -1689,13 +1811,23 @@ export default function App() {
                             </div>
 
                             {/* Expanded History */}
-                            {isExpanded && logs.length > 1 && (
+                            {isExpanded && logs.length > 0 && (
                                 <div className="bg-slate-900/30 border-t border-slate-700/50 p-2 space-y-1 animate-fade-in">
-                                    {logs.slice(1).map((log, index) => {
+                                    {logs.map((log, index) => {
                                         const currentDate = getDayLabel(log.timestamp);
-                                        const prevLog = logs.slice(1)[index - 1];
-                                        const prevDate = prevLog ? getDayLabel(prevLog.timestamp) : null;
-                                        const showDivider = index === 0 || currentDate !== prevDate;
+                                        const prevLog = logs[index - 1]; // In the expanded view, prev logic is slightly different due to sort. But groups are sorted descending.
+                                        // Since logs are sorted descending, index-1 is actually the "newer" log visually if we render top-down, but chronologically next is index+1.
+                                        // However, standard history display:
+                                        // We want dividers when the day changes.
+                                        // logs[0] is newest. logs[last] is oldest.
+                                        // If index > 0, compare with index-1. If different day, show divider?
+                                        // Wait, logs are sorted descending.
+                                        // logs[0] = Today 10pm
+                                        // logs[1] = Today 8pm
+                                        // logs[2] = Yesterday
+                                        
+                                        const prevLogDate = index > 0 ? getDayLabel(logs[index - 1].timestamp) : null;
+                                        const showDivider = index === 0 || currentDate !== prevLogDate;
 
                                         return (
                                           <React.Fragment key={log.id}>
@@ -1704,7 +1836,7 @@ export default function App() {
                                                     {currentDate}
                                                 </div>
                                               )}
-                                              <div className="flex justify-between items-center p-2 rounded hover:bg-slate-800/50 text-xs text-slate-400">
+                                              <div className="flex justify-between items-center p-2 rounded hover:bg-slate-800/50 text-xs text-slate-400 group/item">
                                                   <div>
                                                       <span className="inline-block w-12 text-slate-500">{new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                                                       {log.details?.exercise ? (
@@ -1717,7 +1849,16 @@ export default function App() {
                                                           <span>{log.amount} {activity?.unit}</span>
                                                       )}
                                                   </div>
-                                                  <span className="text-blue-500/70">+{log.xpGained}</span>
+                                                  <div className="flex items-center gap-3">
+                                                      <span className="text-blue-500/70">+{log.xpGained}</span>
+                                                      <button 
+                                                        onClick={(e) => { e.stopPropagation(); handleDeleteLog(log.id); }}
+                                                        className="text-slate-600 hover:text-red-400 transition-colors p-1"
+                                                        title="Excluir Registro"
+                                                      >
+                                                          {getIcon("Trash", "w-3 h-3")}
+                                                      </button>
+                                                  </div>
                                               </div>
                                           </React.Fragment>
                                         );

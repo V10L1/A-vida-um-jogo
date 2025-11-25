@@ -48,7 +48,8 @@ import {
   Cigarette,
   Beer,
   Pizza,
-  TriangleAlert
+  TriangleAlert,
+  Trash2
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -90,6 +91,7 @@ export const getIcon = (name: string, className?: string) => {
     case 'Pencil': return <Pencil {...props} />;
     case 'Save': return <Save {...props} />;
     case 'X': return <X {...props} />;
+    case 'Trash': return <Trash2 {...props} />; // Mapped Trash to Trash2
     case 'Camera': return <Camera {...props} />;
     case 'Timer': return <Timer {...props} />;
     case 'Play': return <Play {...props} />;
