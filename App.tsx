@@ -239,8 +239,8 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  // Auth Views: 'onboarding' (creates character locally), 'login' (email/pass), 'register' (new account email/pass)
-  const [authView, setAuthView] = useState<'onboarding' | 'login' | 'register'>('onboarding');
+  // Auth Views: 'login' (email/pass), 'register' (combined with character creation)
+  const [authView, setAuthView] = useState<'login' | 'register'>('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authConfirmPassword, setAuthConfirmPassword] = useState('');
@@ -650,7 +650,10 @@ export default function App() {
                   if (savedUser && savedGame) {
                       await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
                   } else {
-                      setAuthView('onboarding');
+                      // New user from cloud perspective, but maybe they just registered?
+                      // If so, handleRegister handled the data. 
+                      // If this is a fresh login with no data, we might need onboarding?
+                      // The merged flow handles this at registration time.
                   }
               }
               setIsSyncing(false);
@@ -699,31 +702,87 @@ export default function App() {
     }
   };
 
-  const handleEmailAuth = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+        await loginWithEmail(authEmail, authPassword);
+    } catch (e: any) {
+        let msg = e.message;
+        if (e.code === 'auth/invalid-credential') msg = "E-mail ou senha incorretos.";
+        alert(msg);
+    }
+  };
+
+  // UNIFIED REGISTER + ONBOARDING FUNCTION
+  const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
+      
+      // 1. Validar Senhas
+      if (authPassword !== authConfirmPassword) {
+          alert("As senhas não conferem!");
+          return;
+      }
+      if (authPassword.length < 6) {
+          alert("A senha deve ter pelo menos 6 caracteres.");
+          return;
+      }
+
+      const formData = new FormData(e.currentTarget);
+      const name = formData.get('name') as string;
+      const gender = formData.get('gender') as Gender;
+      const dob = formData.get('dob') as string;
+      const profession = formData.get('profession') as string;
+      const weight = Number(formData.get('weight'));
+      const height = Number(formData.get('height'));
+      
       try {
-          if (authView === 'register') {
-              if (authPassword !== authConfirmPassword) {
-                  alert("As senhas não conferem!");
-                  return;
-              }
-              await registerWithEmail(authEmail, authPassword);
-          } else {
-              await loginWithEmail(authEmail, authPassword);
+          // 2. Criar Conta no Firebase
+          const firebaseUser = await registerWithEmail(authEmail, authPassword);
+          
+          // 3. Gerar Perfil
+          const newUser: UserProfile = {
+              name,
+              dob,
+              weight,
+              height,
+              gender,
+              profession
+          };
+
+          // 4. Gerar GameState Inicial (com bonus de BMI)
+          const bmiBonus = calculateBmiBonus(weight, height);
+          const initialAttributes = { ...gameState.attributes };
+          if (bmiBonus > 0) {
+              initialAttributes.END = bmiBonus;
           }
+          
+          const newGameState: GameState = {
+              ...gameState,
+              attributes: initialAttributes
+          };
+
+          // 5. Salvar Tudo na Nuvem e Local
+          setUser(newUser);
+          setGameState(newGameState);
+          setCurrentUser(firebaseUser); // Força atualização local imediata
+          
+          await saveUserDataToCloud(firebaseUser.uid, newUser, newGameState);
+          
+          // 6. Narrador
+          updateNarrator(newUser, newGameState, undefined, true);
+
       } catch (e: any) {
           let msg = e.message;
-          if (e.code === 'auth/invalid-credential') msg = "E-mail ou senha incorretos.";
           if (e.code === 'auth/email-already-in-use') msg = "Este e-mail já está cadastrado.";
-          if (e.code === 'auth/weak-password') msg = "A senha deve ter pelo menos 6 caracteres.";
-          alert(msg);
+          if (e.code === 'auth/weak-password') msg = "A senha é muito fraca.";
+          alert("Erro ao criar conta: " + msg);
       }
   };
 
   const handleLogout = async () => {
     await logoutUser();
     setUser(null); // Clear local session view
-    setAuthView('onboarding'); // Reset view
+    setAuthView('login'); // Reset view
   };
 
   const calculateXpForNextLevel = (level: number) => {
@@ -823,36 +882,6 @@ export default function App() {
           default:
               return "Aventureiro";
       }
-  };
-
-  const handleOnboarding = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const weight = Number(formData.get('weight'));
-    const height = Number(formData.get('height'));
-    
-    const newUser: UserProfile = {
-      name: formData.get('name') as string,
-      dob: formData.get('dob') as string,
-      weight: weight,
-      height: height,
-      gender: formData.get('gender') as Gender,
-      profession: formData.get('profession') as string
-    };
-    
-    // Aplicar bônus inicial de IMC
-    const bmiBonus = calculateBmiBonus(weight, height);
-    const initialAttributes = { ...gameState.attributes };
-    if (bmiBonus > 0) {
-        initialAttributes.END = bmiBonus;
-    }
-
-    setUser(newUser);
-    setGameState(prev => ({
-        ...prev,
-        attributes: initialAttributes
-    }));
-    updateNarrator(newUser, gameState, undefined, true);
   };
 
   const handleUpdateProfile = (e: React.FormEvent<HTMLFormElement>) => {
@@ -1590,58 +1619,18 @@ export default function App() {
 
           <div className="bg-slate-900/80 p-6 rounded-2xl shadow-xl border border-slate-800 backdrop-blur-sm">
             
-            {/* Abas de Navegação Auth */}
+            {/* Abas de Navegação Auth simplificadas */}
             <div className="flex border-b border-slate-700 mb-6">
-                <button onClick={() => setAuthView('onboarding')} className={`flex-1 pb-2 text-sm font-bold uppercase transition-colors ${authView === 'onboarding' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500 hover:text-slate-300'}`}>
-                    Criar Personagem
-                </button>
                 <button onClick={() => setAuthView('login')} className={`flex-1 pb-2 text-sm font-bold uppercase transition-colors ${authView === 'login' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500 hover:text-slate-300'}`}>
-                    Entrar
+                    Já tenho conta
                 </button>
                 <button onClick={() => setAuthView('register')} className={`flex-1 pb-2 text-sm font-bold uppercase transition-colors ${authView === 'register' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500 hover:text-slate-300'}`}>
-                    Cadastrar
+                    Criar Nova Jornada
                 </button>
             </div>
 
-            {authView === 'onboarding' ? (
-                <form onSubmit={handleOnboarding} className="space-y-4 animate-fade-in">
-                    <div>
-                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Nome do Herói</label>
-                    <input name="name" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Aragorn" />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Gênero</label>
-                        <select name="gender" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none">
-                            <option value="Masculino">Masculino</option>
-                            <option value="Feminino">Feminino</option>
-                            <option value="Outros">Outros</option>
-                        </select>
-                        </div>
-                        <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Data Nasc.</label>
-                        <input type="date" name="dob" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
-                        </div>
-                    </div>
-                    <div>
-                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Profissão (Vida Real)</label>
-                    <input name="profession" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Programador..." />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                    <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Peso (kg)</label>
-                        <input type="number" name="weight" step="0.1" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
-                    </div>
-                    <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Altura (cm)</label>
-                        <input type="number" name="height" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
-                    </div>
-                    </div>
-                    <button type="submit" className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-blue-500/20">Iniciar Jogo Local</button>
-                    <p className="text-[10px] text-slate-500 text-center">Os dados ficam salvos apenas neste dispositivo.</p>
-                </form>
-            ) : (
-                <form onSubmit={handleEmailAuth} className="space-y-4 animate-fade-in">
+            {authView === 'login' ? (
+                <form onSubmit={handleLogin} className="space-y-4 animate-fade-in">
                      <div>
                         <label className="block text-xs font-bold text-slate-400 uppercase mb-1">E-mail</label>
                         <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="seu@email.com" />
@@ -1650,24 +1639,8 @@ export default function App() {
                         <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Senha</label>
                         <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="******" />
                      </div>
-                     {authView === 'register' && (
-                        <div>
-                            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Confirmar Senha</label>
-                            <input 
-                                type="password" 
-                                value={authConfirmPassword} 
-                                onChange={e => setAuthConfirmPassword(e.target.value)} 
-                                required 
-                                className={`w-full bg-slate-950 border rounded-lg p-3 text-white focus:ring-2 outline-none ${authPassword && authConfirmPassword && authPassword !== authConfirmPassword ? 'border-red-500 focus:ring-red-500' : 'border-slate-700 focus:ring-blue-500'}`} 
-                                placeholder="******" 
-                            />
-                            {authPassword && authConfirmPassword && authPassword !== authConfirmPassword && (
-                                <p className="text-red-500 text-xs mt-1 font-bold">As senhas não conferem!</p>
-                            )}
-                        </div>
-                     )}
                      <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors">
-                         {authView === 'register' ? 'Criar Conta' : 'Entrar'}
+                         Entrar
                      </button>
                      
                      <div className="flex items-center gap-4 before:h-px before:flex-1 before:bg-slate-700 after:h-px after:flex-1 after:bg-slate-700">
@@ -1677,6 +1650,80 @@ export default function App() {
                      <button type="button" onClick={handleGoogleLogin} className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-semibold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
                          {getIcon("User", "w-4 h-4")} Continuar com Google
                      </button>
+                </form>
+            ) : (
+                <form onSubmit={handleRegister} className="space-y-4 animate-fade-in">
+                    <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50 mb-4">
+                        <h3 className="text-xs font-bold text-indigo-400 uppercase mb-3 border-b border-indigo-500/30 pb-1">Dados do Herói</h3>
+                        <div className="space-y-3">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Nome do Herói</label>
+                                <input name="name" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Aragorn" />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Gênero</label>
+                                <select name="gender" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none">
+                                    <option value="Masculino">Masculino</option>
+                                    <option value="Feminino">Feminino</option>
+                                    <option value="Outros">Outros</option>
+                                </select>
+                                </div>
+                                <div>
+                                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Data Nasc.</label>
+                                <input type="date" name="dob" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Profissão (Vida Real)</label>
+                                <input name="profession" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Programador..." />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Peso (kg)</label>
+                                    <input type="number" name="weight" step="0.1" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Altura (cm)</label>
+                                    <input type="number" name="height" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
+                        <h3 className="text-xs font-bold text-emerald-400 uppercase mb-3 border-b border-emerald-500/30 pb-1">Dados de Acesso</h3>
+                        <div className="space-y-3">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">E-mail</label>
+                                <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="seu@email.com" />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Senha</label>
+                                    <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="******" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Confirmar</label>
+                                    <input 
+                                        type="password" 
+                                        value={authConfirmPassword} 
+                                        onChange={e => setAuthConfirmPassword(e.target.value)} 
+                                        required 
+                                        className={`w-full bg-slate-950 border rounded-lg p-2 text-white focus:ring-2 outline-none ${authPassword && authConfirmPassword && authPassword !== authConfirmPassword ? 'border-red-500 focus:ring-red-500' : 'border-slate-700 focus:ring-blue-500'}`} 
+                                        placeholder="******" 
+                                    />
+                                </div>
+                            </div>
+                             {authPassword && authConfirmPassword && authPassword !== authConfirmPassword && (
+                                <p className="text-red-500 text-xs font-bold text-center">As senhas não conferem!</p>
+                            )}
+                        </div>
+                    </div>
+
+                    <button type="submit" className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-blue-500/20 mt-4">
+                        Iniciar Jornada
+                    </button>
                 </form>
             )}
 
