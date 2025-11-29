@@ -631,7 +631,6 @@ export default function App() {
                 );
 
                 const newState = { 
-                    ...prev => ({ ...prev }), // placeholder, we replace whole state
                     ...cloudGame,
                     attributes: safeAttributes,
                     quests,
@@ -784,8 +783,30 @@ export default function App() {
 
   const handleLogout = async () => {
     await logoutUser();
-    setUser(null); // Clear local session view
-    setAuthView('login'); // Reset view
+    
+    // Clear Local Storage to prevent data bleeding
+    localStorage.removeItem('liferpg_user');
+    localStorage.removeItem('liferpg_game');
+    localStorage.removeItem('liferpg_needs_sync');
+    
+    // Reset All State
+    setUser(null);
+    setCurrentUser(null);
+    setGameState({
+        level: 1,
+        currentXp: 0,
+        totalXp: 0,
+        logs: [],
+        classTitle: "NPC",
+        attributes: { STR: 0, END: 0, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0 }, 
+        activeBuff: null,
+        quests: [],
+        guildId: undefined
+    });
+    setCurrentGuild(null);
+    setChatMessages([]);
+    setAuthView('login');
+    setNarratorText("Até a próxima jornada.");
   };
 
   const calculateXpForNextLevel = (level: number) => {
@@ -1771,13 +1792,21 @@ export default function App() {
                         {unclaimedQuestsCount > 0 && <span className="absolute -top-1 -right-1 flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
                    </button>
                    {currentUser ? (
-                      isSyncing ? (
-                         <button className="text-[10px] bg-blue-900/50 text-blue-400 border border-blue-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-blue-500 rounded-full animate-spin"></div> Sync</button>
-                      ) : isOnline ? (
-                         <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-emerald-900/50 text-emerald-400 border border-emerald-800 px-2 py-1 rounded flex items-center gap-1 hover:bg-emerald-900 transition-colors"><div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>Salvo</button>
-                      ) : (
-                         <button className="text-[10px] bg-red-900/50 text-red-400 border border-red-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-red-500 rounded-full"></div>Offline</button>
-                      )
+                      <div className="flex gap-2">
+                        {/* Status Indicator */}
+                        {isSyncing ? (
+                            <div className="text-[10px] text-blue-400 border border-blue-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-blue-500 rounded-full animate-spin"></div></div>
+                        ) : isOnline ? (
+                            <div className="text-[10px] text-emerald-400 border border-emerald-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-emerald-500 rounded-full"></div></div>
+                        ) : (
+                            <div className="text-[10px] text-red-400 border border-red-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-red-500 rounded-full"></div></div>
+                        )}
+                        
+                        {/* Logout Button */}
+                        <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-slate-800 text-slate-300 border border-slate-600 px-2 py-1 rounded flex items-center gap-1 hover:bg-red-900/50 hover:text-red-200 hover:border-red-700 transition-colors">
+                            {getIcon("X", "w-3 h-3")} Sair
+                        </button>
+                      </div>
                    ) : (
                       <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-1 rounded flex items-center gap-1 hover:text-white hover:border-slate-500 transition-colors">☁️ Login</button>
                    )}
