@@ -1,5 +1,3 @@
-
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember, RPG_CLASSES, PublicProfile, Duel, Territory } from './types';
 import { getIcon } from './components/Icons';
@@ -179,8 +177,11 @@ export default function App() {
   const [gymWeight, setGymWeight] = useState('');
   const [gymReps, setGymReps] = useState('');
   const [gymRestTime, setGymRestTime] = useState('02:00');
-  const [isResting, setIsResting] = useState(false);
+  
+  // NEW TIMER LOGIC: Using Timestamp instead of countdown for persistence
+  const [restEndTime, setRestEndTime] = useState<number | null>(null);
   const [timerTimeLeft, setTimerTimeLeft] = useState(0);
+
   const [runDistance, setRunDistance] = useState('');
   const [runDuration, setRunDuration] = useState('');
   const [targetTool, setTargetTool] = useState('');
@@ -284,13 +285,30 @@ export default function App() {
     return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); };
   }, [currentUser, user, gameState]);
 
-  // --- Timer ---
+  // --- Robust Timer Logic ---
   useEffect(() => {
-    if (isResting && timerTimeLeft > 0) {
-        timerIntervalRef.current = window.setInterval(() => { setTimerTimeLeft(prev => { if (prev <= 1) { setIsResting(false); if (navigator.vibrate) navigator.vibrate([200, 100, 200]); return 0; } return prev - 1; }); }, 1000);
-    } else if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    if (restEndTime) {
+        // Update timer immediately and then every second
+        const updateTimer = () => {
+            const now = Date.now();
+            const diff = Math.ceil((restEndTime - now) / 1000);
+            if (diff <= 0) {
+                setRestEndTime(null);
+                setTimerTimeLeft(0);
+                if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+            } else {
+                setTimerTimeLeft(diff);
+            }
+        };
+
+        updateTimer(); // Run once immediately
+        timerIntervalRef.current = window.setInterval(updateTimer, 500); // Check frequently
+    } else {
+        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+        setTimerTimeLeft(0);
+    }
     return () => { if (timerIntervalRef.current) clearInterval(timerIntervalRef.current); };
-  }, [isResting, timerTimeLeft]);
+  }, [restEndTime]);
 
   // --- Geolocation ---
   useEffect(() => {
@@ -646,7 +664,14 @@ export default function App() {
         if (reps <= 6) { newAttributes.STR = (newAttributes.STR || 0) + attributePoints; newAttributes.END = (newAttributes.END || 0) + Math.ceil(attributePoints * 0.5); } 
         else if (reps >= 7 && reps <= 9) { newAttributes.STR = (newAttributes.STR || 0) + Math.ceil(attributePoints * 0.7); newAttributes.END = (newAttributes.END || 0) + Math.ceil(attributePoints * 0.7); } 
         else { newAttributes.END = (newAttributes.END || 0) + attributePoints; newAttributes.STR = (newAttributes.STR || 0) + Math.ceil(attributePoints * 0.5); }
-        const [mins, secs] = gymRestTime.split(':').map(Number); const totalSecs = (mins * 60) + secs; if (totalSecs > 0) { setTimerTimeLeft(totalSecs); setIsResting(true); }
+        
+        // Timer Logic with Timestamp
+        const [mins, secs] = gymRestTime.split(':').map(Number); 
+        const totalSecs = (mins * 60) + secs; 
+        if (totalSecs > 0) { 
+            const endTime = Date.now() + (totalSecs * 1000);
+            setRestEndTime(endTime);
+        }
     } else if (selectedActivity.id === 'run') {
         const distance = Number(runDistance) || 0; if (distance <= 0) return;
         const [minsStr, secsStr] = runDuration.split(':'); const totalMinutes = (Number(minsStr) || 0) + ((Number(secsStr) || 0) / 60); if (totalMinutes <= 0) return;
@@ -861,7 +886,7 @@ export default function App() {
               <div className="space-y-4">
                   <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Exercício</label><input list="gym-exercises" value={gymExercise} onChange={e => setGymExercise(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" placeholder="Ex: Supino Reto" /><datalist id="gym-exercises">{uniqueExercises.map(ex => <option key={ex} value={ex} />)}</datalist></div>
                   <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Carga (Kg)</label><input type="number" value={gymWeight} onChange={e => setGymWeight(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" /></div><div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Repetições</label><input type="number" value={gymReps} onChange={e => setGymReps(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" /></div></div>
-                  <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 text-center"><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Descanso</label><div className="flex items-center justify-center gap-4 mb-3"><button onClick={() => setGymRestTime("01:00")} className="text-xs bg-slate-700 px-2 py-1 rounded">1:00</button><button onClick={() => setGymRestTime("01:30")} className="text-xs bg-slate-700 px-2 py-1 rounded">1:30</button><button onClick={() => setGymRestTime("02:00")} className="text-xs bg-slate-700 px-2 py-1 rounded">2:00</button></div>{isResting ? (<div className="text-4xl font-mono font-bold text-blue-400 animate-pulse">{Math.floor(timerTimeLeft / 60)}:{(timerTimeLeft % 60).toString().padStart(2, '0')}</div>) : (<input type="time" value={gymRestTime} onChange={e => setGymRestTime(e.target.value)} className="bg-slate-950 text-white p-2 rounded text-center font-mono w-24 mx-auto block" />)}{isResting && (<button onClick={() => { setIsResting(false); setTimerTimeLeft(0); }} className="mt-3 text-xs text-red-400 flex items-center justify-center gap-1 mx-auto">{getIcon("X", "w-3 h-3")} Cancelar</button>)}</div>
+                  <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 text-center"><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Descanso</label><div className="flex items-center justify-center gap-4 mb-3"><button onClick={() => setGymRestTime("01:00")} className="text-xs bg-slate-700 px-2 py-1 rounded">1:00</button><button onClick={() => setGymRestTime("01:30")} className="text-xs bg-slate-700 px-2 py-1 rounded">1:30</button><button onClick={() => setGymRestTime("02:00")} className="text-xs bg-slate-700 px-2 py-1 rounded">2:00</button></div>{restEndTime ? (<div className="text-4xl font-mono font-bold text-blue-400 animate-pulse">{Math.floor(timerTimeLeft / 60)}:{(timerTimeLeft % 60).toString().padStart(2, '0')}</div>) : (<input type="time" value={gymRestTime} onChange={e => setGymRestTime(e.target.value)} className="bg-slate-950 text-white p-2 rounded text-center font-mono w-24 mx-auto block" />)}{restEndTime && (<button onClick={() => { setRestEndTime(null); setTimerTimeLeft(0); }} className="mt-3 text-xs text-red-400 flex items-center justify-center gap-1 mx-auto">{getIcon("X", "w-3 h-3")} Cancelar</button>)}</div>
                   <button onClick={handleLogActivity} className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2">{getIcon("CheckCircle", "w-5 h-5")} Registrar Série</button>
               </div>
           ) : selectedActivity?.id === 'run' ? (
