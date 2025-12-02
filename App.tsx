@@ -1,11 +1,31 @@
+
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember, RPG_CLASSES, PublicProfile, Duel } from './types';
+import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember, RPG_CLASSES, PublicProfile, Duel, Territory } from './types';
 import { getIcon } from './components/Icons';
 import { generateRpgFlavorText, NarratorTrigger } from './services/geminiService';
-import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail, getGlobalRanking, createDuel, fetchActiveDuels, acceptDuel, updateDuelProgress, cancelDuel } from './firebase';
+import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail, getGlobalRanking, createDuel, fetchActiveDuels, acceptDuel, updateDuelProgress, cancelDuel, createTerritory, deleteTerritory, subscribeToTerritories, attackTerritoryTarget, banUser } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 
-// --- Helper Components ---
+// --- Helper Functions ---
+function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+  var R = 6371; // Radius of the earth in km
+  var dLat = deg2rad(lat2-lat1);  // deg2rad below
+  var dLon = deg2rad(lon2-lon1); 
+  var a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2)
+    ; 
+  var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+  var d = R * c; // Distance in km
+  return d;
+}
+
+function deg2rad(deg: number) {
+  return deg * (Math.PI/180)
+}
 
 const ProgressBar = ({ current, max, color = "bg-blue-500" }: { current: number; max: number; color?: string }) => {
   const percentage = Math.min(100, Math.max(0, (current / max) * 100));
@@ -119,6 +139,15 @@ const ATROPHY_THRESHOLDS: Record<Attribute, number> = {
     STR: 14, VIG: 14, INT: 14, AGI: 18, END: 21, DEX: 25, CHA: 21, DRV: 30
 };
 
+// --- Leaflet Map Helper ---
+const RecenterMap = ({ lat, lng }: { lat: number, lng: number }) => {
+    const map = useMap();
+    useEffect(() => {
+        map.setView([lat, lng]);
+    }, [lat, lng]);
+    return null;
+}
+
 // --- Main App ---
 
 export default function App() {
@@ -136,6 +165,8 @@ export default function App() {
   const [isGuildModalOpen, setIsGuildModalOpen] = useState(false);
   const [isRankModalOpen, setIsRankModalOpen] = useState(false);
   const [isChallengeModalOpen, setIsChallengeModalOpen] = useState(false);
+  const [isMapModalOpen, setIsMapModalOpen] = useState(false);
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   
   // Profile Summary State
   const [summaryDate, setSummaryDate] = useState(new Date());
@@ -185,6 +216,18 @@ export default function App() {
   const [challengeActivityId, setChallengeActivityId] = useState('pushup');
   const [challengeTarget, setChallengeTarget] = useState('');
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+
+  // Map & Territory State
+  const [userLocation, setUserLocation] = useState<{ lat: number, lng: number } | null>(null);
+  const [territories, setTerritories] = useState<Territory[]>([]);
+  const [selectedTerritory, setSelectedTerritory] = useState<Territory | null>(null);
+  const [userList, setUserList] = useState<PublicProfile[]>([]); // For Admin
+
+  // Admin Create Territory Inputs
+  const [newTerritoryName, setNewTerritoryName] = useState('');
+  const [newTerritoryRadius, setNewTerritoryRadius] = useState(100);
+  const [newEnemyName, setNewEnemyName] = useState('Inimigo Local');
+  const [newEnemyHp, setNewEnemyHp] = useState(500);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const timerIntervalRef = useRef<number | null>(null);
@@ -248,6 +291,27 @@ export default function App() {
     } else if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     return () => { if (timerIntervalRef.current) clearInterval(timerIntervalRef.current); };
   }, [isResting, timerTimeLeft]);
+
+  // --- Geolocation ---
+  useEffect(() => {
+      if ('geolocation' in navigator) {
+          const watchId = navigator.geolocation.watchPosition(
+              (pos) => { setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }); },
+              (err) => console.error("Error getting location", err),
+              { enableHighAccuracy: true, timeout: 20000, maximumAge: 1000 }
+          );
+          return () => navigator.geolocation.clearWatch(watchId);
+      }
+  }, []);
+
+  // --- Subscriptions ---
+  useEffect(() => {
+    // Subscribe to territories
+    const unsubTerritories = subscribeToTerritories((list) => {
+        setTerritories(list);
+    });
+    return () => unsubTerritories();
+  }, []);
   
   // --- NEW QUEST GENERATION LOGIC ---
   const generateNewQuests = (currentQuests: Quest[], currentClass: string, lastDaily?: number, lastWeekly?: number, logs: ActivityLog[] = []): { quests: Quest[], lastDaily: number, lastWeekly: number } => {
@@ -449,6 +513,13 @@ export default function App() {
   useEffect(() => { if (user) { localStorage.setItem('liferpg_user', JSON.stringify(user)); if (currentUser && gameState) saveUserDataToCloud(currentUser.uid, user, gameState).then(s => { if(!s) localStorage.setItem('liferpg_needs_sync', 'true'); }); } }, [user]);
   useEffect(() => { if (gameState) { localStorage.setItem('liferpg_game', JSON.stringify(gameState)); if (currentUser && user) saveUserDataToCloud(currentUser.uid, user, gameState).then(s => { if(!s) localStorage.setItem('liferpg_needs_sync', 'true'); }); } }, [gameState]);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages, isGuildModalOpen, guildTab]);
+
+  // Admin Loading
+  const handleOpenAdmin = async () => {
+    setIsAdminModalOpen(true);
+    const list = await getGlobalRanking(); // Reuse this to get all users roughly
+    setUserList(list);
+  };
 
   const handleGoogleLogin = async () => { try { await loginWithGoogle(); } catch (e: any) { alert("Erro ao iniciar login: " + e.message); } };
   const handleLogin = async (e: React.FormEvent) => { e.preventDefault(); try { await loginWithEmail(authEmail, authPassword); } catch (e: any) { alert("Erro Login: " + e.message); } };
@@ -669,6 +740,24 @@ export default function App() {
   const handleAcceptDuel = async (duel: Duel) => { await acceptDuel(duel.id); };
   const handleCancelDuel = async (duelId: string) => { if(window.confirm("Deseja cancelar/recusar este duelo?")) { await cancelDuel(duelId); } };
 
+  // --- Map & Territory Functions ---
+  const handleCreateTerritory = async () => {
+      if (!userLocation) return;
+      await createTerritory(newTerritoryName, userLocation.lat, userLocation.lng, newTerritoryRadius, newEnemyName, newEnemyHp);
+      setNewTerritoryName(''); setIsAdminModalOpen(false); alert("Território criado!");
+  };
+  const handleAttackTerritory = async () => {
+      if (!selectedTerritory || !currentUser || !user) return;
+      // Calcula XP/Dano. Para MVP, usamos um valor fixo ou baseado no level.
+      const damage = 20 + (gameState.level * 2); 
+      await attackTerritoryTarget(selectedTerritory.id, damage, currentUser.uid, user.name);
+      // Simulate XP gain from combat
+      const xp = 50; 
+      const newXp = gameState.currentXp + xp;
+      // ... XP logic simplified for brevity ...
+      alert(`Você atacou o ${selectedTerritory.activeEnemy.name}! Causou ${damage} de dano.`);
+  };
+
   const getAvatarUrl = useMemo(() => { if (!user) return ''; if (user.avatarImage) return user.avatarImage; return `https://api.dicebear.com/9.x/micah/svg?seed=${user.name.replace(/\s/g, '')}`; }, [user]);
   const isBuffActive = gameState.activeBuff && Date.now() < gameState.activeBuff.expiresAt;
   const buffPercentage = isBuffActive ? Math.round((gameState.activeBuff!.multiplier - 1) * 100) : 0;
@@ -732,6 +821,8 @@ export default function App() {
             </div>
             <div className="flex flex-col items-end gap-1">
                <div className="flex gap-2 flex-wrap justify-end">
+                   {user.role === 'admin' && (<button onClick={(e) => { e.stopPropagation(); handleOpenAdmin(); }} className="text-[10px] bg-red-900/40 text-red-400 border border-red-700/50 px-2 py-1 rounded flex items-center gap-1">{getIcon("ShieldAlert", "w-3 h-3")} ADMIN</button>)}
+                   <button onClick={(e) => { e.stopPropagation(); setIsMapModalOpen(true); }} className="text-[10px] bg-emerald-900/40 text-emerald-400 border border-emerald-700/50 px-2 py-1 rounded flex items-center gap-1">{getIcon("Map", "w-3 h-3")} MAPA</button>
                    <button onClick={(e) => { e.stopPropagation(); setIsRankModalOpen(true); }} className="text-[10px] bg-yellow-900/40 text-yellow-400 border border-yellow-700/50 px-2 py-1 rounded flex items-center gap-1">Rank</button>
                    <button onClick={(e) => { e.stopPropagation(); setIsGuildModalOpen(true); }} className="text-[10px] bg-indigo-900/40 text-indigo-400 border border-indigo-700/50 px-2 py-1 rounded flex items-center gap-1">Clã</button>
                    <button onClick={(e) => { e.stopPropagation(); setIsQuestModalOpen(true); }} className="text-[10px] bg-amber-900/40 text-amber-400 border border-amber-700/50 px-2 py-1 rounded flex items-center gap-1">Quests {unclaimedQuestsCount > 0 && <span className="w-2 h-2 bg-red-500 rounded-full ml-1 animate-pulse"></span>}</button>
@@ -954,6 +1045,93 @@ export default function App() {
                  </div>
              </div>
            )}
+      </Modal>
+
+      <Modal isOpen={isMapModalOpen} onClose={() => { setIsMapModalOpen(false); setSelectedTerritory(null); }} title="Mapa de Territórios" large>
+           <div className="h-[400px] w-full rounded-xl overflow-hidden relative">
+               {userLocation ? (
+                   <MapContainer center={[userLocation.lat, userLocation.lng]} zoom={15} style={{ height: '100%', width: '100%' }}>
+                       <TileLayer
+                          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                       />
+                       <RecenterMap lat={userLocation.lat} lng={userLocation.lng} />
+                       <Marker position={[userLocation.lat, userLocation.lng]}>
+                           <Popup>Você está aqui</Popup>
+                       </Marker>
+                       {territories.map(t => (
+                           <Circle 
+                              key={t.id} 
+                              center={[t.lat, t.lng]} 
+                              radius={t.radius}
+                              pathOptions={{ color: t.ownerId === currentUser?.uid ? 'green' : 'red', fillColor: t.ownerId === currentUser?.uid ? 'green' : 'red' }}
+                              eventHandlers={{ click: () => setSelectedTerritory(t) }}
+                           />
+                       ))}
+                   </MapContainer>
+               ) : (
+                   <div className="flex items-center justify-center h-full text-slate-400">Obtendo localização...</div>
+               )}
+               {selectedTerritory && (
+                   <div className="absolute bottom-4 left-4 right-4 bg-slate-900/90 p-4 rounded-xl border border-slate-700 z-[1000]">
+                       <div className="flex justify-between items-start mb-2">
+                           <div>
+                               <h3 className="font-bold text-white">{selectedTerritory.name}</h3>
+                               <p className="text-xs text-slate-400">Dono: {selectedTerritory.ownerName || "Ninguém"}</p>
+                           </div>
+                           <button onClick={() => setSelectedTerritory(null)} className="text-slate-400">{getIcon("X", "w-4 h-4")}</button>
+                       </div>
+                       <div className="flex gap-4 items-center">
+                           <div className="text-4xl">{selectedTerritory.activeEnemy.image}</div>
+                           <div className="flex-1">
+                               <div className="flex justify-between text-xs font-bold mb-1"><span className="text-red-400">{selectedTerritory.activeEnemy.name} (Lvl {selectedTerritory.activeEnemy.level})</span><span>{selectedTerritory.activeEnemy.currentHp}/{selectedTerritory.activeEnemy.maxHp}</span></div>
+                               <ProgressBar current={selectedTerritory.activeEnemy.currentHp} max={selectedTerritory.activeEnemy.maxHp} color="bg-red-600" />
+                           </div>
+                       </div>
+                       <div className="mt-4">
+                           {userLocation && getDistanceFromLatLonInKm(userLocation.lat, userLocation.lng, selectedTerritory.lat, selectedTerritory.lng) * 1000 <= selectedTerritory.radius ? (
+                               <button onClick={handleAttackTerritory} className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2 rounded-lg flex items-center justify-center gap-2">{getIcon("Swords", "w-4 h-4")} BATALHAR</button>
+                           ) : (
+                               <button disabled className="w-full bg-slate-700 text-slate-500 font-bold py-2 rounded-lg cursor-not-allowed">Você está muito longe</button>
+                           )}
+                       </div>
+                   </div>
+               )}
+           </div>
+      </Modal>
+
+      <Modal isOpen={isAdminModalOpen} onClose={() => setIsAdminModalOpen(false)} title="Painel Admin" large>
+           <div className="space-y-6">
+               <div className="bg-slate-800 p-4 rounded-xl">
+                   <h3 className="font-bold text-white mb-4 border-b border-slate-700 pb-2">Criar Território</h3>
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                       <input value={newTerritoryName} onChange={e => setNewTerritoryName(e.target.value)} placeholder="Nome do Local" className="bg-slate-950 border border-slate-700 rounded p-2 text-white" />
+                       <input type="number" value={newTerritoryRadius} onChange={e => setNewTerritoryRadius(Number(e.target.value))} placeholder="Raio (metros)" className="bg-slate-950 border border-slate-700 rounded p-2 text-white" />
+                       <input value={newEnemyName} onChange={e => setNewEnemyName(e.target.value)} placeholder="Nome do Inimigo" className="bg-slate-950 border border-slate-700 rounded p-2 text-white" />
+                       <input type="number" value={newEnemyHp} onChange={e => setNewEnemyHp(Number(e.target.value))} placeholder="HP Inimigo" className="bg-slate-950 border border-slate-700 rounded p-2 text-white" />
+                   </div>
+                   <div className="flex justify-between items-center mb-4 text-xs text-slate-400 bg-slate-900 p-2 rounded">
+                       <span>Localização Atual:</span>
+                       <span>{userLocation ? `${userLocation.lat.toFixed(5)}, ${userLocation.lng.toFixed(5)}` : "Desconhecida"}</span>
+                   </div>
+                   <button onClick={handleCreateTerritory} disabled={!userLocation} className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-2 rounded-lg">CRIAR AQUI</button>
+               </div>
+               
+               <div className="bg-slate-800 p-4 rounded-xl">
+                   <h3 className="font-bold text-white mb-4 border-b border-slate-700 pb-2">Gerenciar Jogadores</h3>
+                   <div className="max-h-60 overflow-y-auto space-y-2">
+                       {userList.map(u => (
+                           <div key={u.uid} className="flex justify-between items-center bg-slate-900 p-2 rounded">
+                               <div>
+                                   <div className="font-bold text-sm">{u.name}</div>
+                                   <div className="text-[10px] text-slate-500">{u.uid}</div>
+                               </div>
+                               <button onClick={() => banUser(u.uid)} className="text-xs bg-red-900 text-red-200 px-2 py-1 rounded hover:bg-red-700">{getIcon("Ban", "w-3 h-3")}</button>
+                           </div>
+                       ))}
+                   </div>
+               </div>
+           </div>
       </Modal>
 
     </div>

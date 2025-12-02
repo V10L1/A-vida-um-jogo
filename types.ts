@@ -10,6 +10,8 @@ export interface UserProfile {
   gender: Gender;
   profession: string;
   avatarImage?: string; // Base64 string da imagem customizada
+  role?: 'user' | 'admin'; // Role para painel administrativo
+  guildId?: string;
 }
 
 // Novos Atributos de RPG
@@ -113,6 +115,28 @@ export interface Guild {
     members: Record<string, GuildMember>; // Mapa de UID -> Member
     xp: number; // XP da guilda para subir de nivel
     boss?: Boss;
+}
+
+// --- TERRITORY SYSTEM ---
+export interface TerritoryEnemy {
+    name: string;
+    maxHp: number;
+    currentHp: number;
+    level: number;
+    image: string; // Emoji or URL
+    xpReward: number;
+}
+
+export interface Territory {
+    id: string;
+    name: string;
+    lat: number;
+    lng: number;
+    radius: number; // meters
+    ownerId?: string;
+    ownerName?: string;
+    ownerKillCount: number; // Quantos inimigos o dono matou neste local
+    activeEnemy: TerritoryEnemy;
 }
 
 export interface GameState {

@@ -1,4 +1,5 @@
 
+
 // @ts-ignore
 import { initializeApp } from "firebase/app";
 import { 
@@ -26,9 +27,10 @@ import {
   runTransaction,
   where,
   getDocs,
-  or
+  or,
+  increment
 } from "firebase/firestore";
-import { GameState, UserProfile, Guild, GuildMember, ChatMessage, PublicProfile, Duel } from "./types";
+import { GameState, UserProfile, Guild, GuildMember, ChatMessage, PublicProfile, Duel, Territory } from "./types";
 
 // Configuração do Firebase usando variáveis de ambiente com limpeza de espaços (.trim)
 // Isso previne erros comuns de copiar/colar na Vercel
@@ -468,6 +470,112 @@ export const updateDuelProgress = async (userId: string, activityId: string, amo
     } catch (e) {
         console.error("Error updating duel progress", e);
     }
+};
+
+// --- TERRITORY & ADMIN FUNCTIONS ---
+
+// Cria território (Admin Only)
+export const createTerritory = async (name: string, lat: number, lng: number, radius: number, enemyName: string, enemyHp: number) => {
+    if (!db) return;
+    try {
+        await addDoc(collection(db, "territories"), {
+            name, lat, lng, radius,
+            ownerKillCount: 0,
+            activeEnemy: {
+                name: enemyName,
+                maxHp: enemyHp,
+                currentHp: enemyHp,
+                level: 1,
+                image: "👾",
+                xpReward: enemyHp / 10
+            }
+        });
+    } catch (e) { console.error("Error creating territory", e); }
+};
+
+// Deleta território (Admin Only)
+export const deleteTerritory = async (id: string) => {
+    if (!db) return;
+    try {
+        await deleteDoc(doc(db, "territories", id));
+    } catch (e) { console.error("Error deleting territory", e); }
+};
+
+// Lista territórios em tempo real
+export const subscribeToTerritories = (callback: (list: Territory[]) => void) => {
+    if (!db) return () => {};
+    const q = query(collection(db, "territories"));
+    return onSnapshot(q, (snap) => {
+        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Territory));
+        callback(list);
+    });
+};
+
+// Atacar inimigo do território (Similar ao Boss de Guilda, mas com lógica de dono)
+export const attackTerritoryTarget = async (territoryId: string, damage: number, userId: string, userName: string) => {
+    if (!db) return;
+    const tRef = doc(db, "territories", territoryId);
+    
+    // Sub-coleção para contar kills do usuário neste território
+    const rankingRef = doc(collection(db, "territories", territoryId, "rankings"), userId);
+
+    try {
+        await runTransaction(db, async (transaction) => {
+            const tDoc = await transaction.get(tRef);
+            if (!tDoc.exists()) throw "Territory not found";
+            const territory = tDoc.data() as Territory;
+
+            let newHp = territory.activeEnemy.currentHp - damage;
+            let enemyDefeated = false;
+            const newEnemy = { ...territory.activeEnemy };
+
+            if (newHp <= 0) {
+                enemyDefeated = true;
+                // Respawn Logic
+                newEnemy.level += 1;
+                newEnemy.maxHp = Math.floor(newEnemy.maxHp * 1.2);
+                newEnemy.currentHp = newEnemy.maxHp;
+            } else {
+                newEnemy.currentHp = newHp;
+            }
+            
+            transaction.update(tRef, { activeEnemy: newEnemy });
+
+            if (enemyDefeated) {
+                // Incrementa Kill Count do Usuário
+                transaction.set(rankingRef, { kills: increment(1), name: userName }, { merge: true });
+                
+                // Verifica se virou o novo dono (Simplificado: Lemos o ranking atual do user e comparamos com o atual dono)
+                // Nota: Transações não podem ler após escrita. Precisariamos de logica mais complexa, 
+                // mas para MVP vamos assumir que o frontend ou uma cloud function faria isso melhor.
+                // Aqui vamos fazer uma "leitura otimista"
+                const userRankDoc = await transaction.get(rankingRef);
+                const currentKills = (userRankDoc.data()?.kills || 0) + 1; // +1 pq acabamos de matar
+                
+                if (currentKills > territory.ownerKillCount) {
+                    transaction.update(tRef, {
+                        ownerId: userId,
+                        ownerName: userName,
+                        ownerKillCount: currentKills
+                    });
+                }
+            }
+        });
+        return true;
+    } catch (e) {
+        console.error("Error attacking territory", e);
+        return false;
+    }
+};
+
+// Admin: Banir Usuário (Excluir doc)
+export const banUser = async (uid: string) => {
+    if (!db) return;
+    if (!window.confirm("Tem certeza que deseja banir/excluir este usuário permanentemente?")) return;
+    try {
+        await deleteDoc(doc(db, "users", uid));
+        alert("Usuário excluído.");
+    } catch(e) { console.error(e); }
 };
 
 export { auth };

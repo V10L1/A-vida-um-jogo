@@ -53,7 +53,12 @@ import {
   Pizza,
   TriangleAlert,
   Trash2,
-  Globe // New
+  Globe,
+  Map,
+  MapPin,
+  Settings,
+  ShieldAlert,
+  Ban
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -77,6 +82,13 @@ export const getIcon = (name: string, className?: string) => {
     case 'ArrowBigUp': return <ArrowBigUp {...props} />;
     case 'Globe': return <Globe {...props} />; // New
     
+    // Map & Admin
+    case 'Map': return <Map {...props} />;
+    case 'MapPin': return <MapPin {...props} />;
+    case 'Settings': return <Settings {...props} />;
+    case 'ShieldAlert': return <ShieldAlert {...props} />;
+    case 'Ban': return <Ban {...props} />;
+
     // Class Icons
     case 'Wind': return <Wind {...props} />;
     case 'Bike': return <Bike {...props} />;
