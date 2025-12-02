@@ -18,6 +18,7 @@ import {
   collection, 
   addDoc, 
   updateDoc, 
+  deleteDoc, // Imported deleteDoc
   onSnapshot, 
   query, 
   orderBy, 
@@ -351,14 +352,6 @@ export const getGlobalRanking = async (classFilter?: string): Promise<PublicProf
         const usersRef = collection(db, "users");
         let q = query(usersRef, orderBy("gameState.totalXp", "desc"), limit(50));
         
-        // Note: Filtering by nested field might require composite index in Firestore
-        // For simplicity/robustness without manual index creation, we filter in client for now if list is small,
-        // or we rely on just ordering by XP.
-        // If 'classTitle' index exists:
-        // if (classFilter && classFilter !== 'Todos') {
-        //    q = query(usersRef, where("gameState.classTitle", "==", classFilter), orderBy("gameState.totalXp", "desc"), limit(50));
-        // }
-
         const snapshot = await getDocs(q);
         const profiles: PublicProfile[] = snapshot.docs.map(doc => {
             const data = doc.data();
@@ -402,7 +395,6 @@ export const createDuel = async (challengerId: string, challengerName: string, o
             createdAt: Date.now()
         };
         await addDoc(duelsRef, newDuel);
-        alert("Desafio enviado!");
     } catch (e) {
         console.error("Error creating duel", e);
         alert("Erro ao criar desafio.");
@@ -417,15 +409,17 @@ export const acceptDuel = async (duelId: string) => {
     } catch (e) { console.error(e); }
 };
 
+export const cancelDuel = async (duelId: string) => {
+    if (!db) return;
+    try {
+        await deleteDoc(doc(db, "duels", duelId));
+    } catch (e) { console.error("Error cancelling duel", e); }
+};
+
 export const fetchActiveDuels = (userId: string, callback: (duels: Duel[]) => void) => {
     if (!db) return () => {};
     
     const duelsRef = collection(db, "duels");
-    // Queries for: I am challenger OR I am opponent
-    // Firestore OR queries are restricted, so we use 'onSnapshot' on a query that checks for involved parties
-    // We simplify by listening to where 'status' is not finished, then filtering in client for security rules simplicity
-    // Ideally: use 'or' query (Firebase v9+)
-    
     const q = query(
         duelsRef, 
         or(
@@ -442,7 +436,6 @@ export const fetchActiveDuels = (userId: string, callback: (duels: Duel[]) => vo
 
 export const updateDuelProgress = async (userId: string, activityId: string, amount: number) => {
     if (!db) return;
-    // This function needs to find active duels for this user + activity and increment
     try {
         const duelsRef = collection(db, "duels");
         const q = query(
