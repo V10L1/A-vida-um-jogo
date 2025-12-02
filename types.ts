@@ -126,7 +126,37 @@ export interface GameState {
   quests: Quest[]; // Lista de missoes ativas
   lastDailyQuestGen?: number; // Data da ultima geracao diaria
   lastWeeklyQuestGen?: number; // Data da ultima geracao semanal
+  lastAtrophyCheck?: number; // Data da ultima verificacao de atrofia
   guildId?: string | null; // ID da guilda se tiver
+}
+
+// --- MULTIPLAYER & PVP ---
+
+export interface PublicProfile {
+    uid: string;
+    name: string;
+    level: number;
+    classTitle: string;
+    totalXp: number;
+    avatarImage?: string;
+    attributes: Record<Attribute, number>;
+}
+
+export type DuelStatus = 'pending' | 'active' | 'finished';
+
+export interface Duel {
+    id: string;
+    challengerId: string;
+    challengerName: string;
+    opponentId: string;
+    opponentName: string;
+    activityId: string; // Ex: 'pushup', 'run'
+    targetAmount: number; // Ex: 100 flexoes
+    challengerProgress: number;
+    opponentProgress: number;
+    status: DuelStatus;
+    winnerId?: string;
+    createdAt: number;
 }
 
 // Lista de Classes para Display (Lógica é calculada dinamicamente)

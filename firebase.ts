@@ -1,3 +1,4 @@
+
 // @ts-ignore
 import { initializeApp } from "firebase/app";
 import { 
@@ -21,9 +22,12 @@ import {
   query, 
   orderBy, 
   limit, 
-  runTransaction 
+  runTransaction,
+  where,
+  getDocs,
+  or
 } from "firebase/firestore";
-import { GameState, UserProfile, Guild, GuildMember, ChatMessage } from "./types";
+import { GameState, UserProfile, Guild, GuildMember, ChatMessage, PublicProfile, Duel } from "./types";
 
 // Configuração do Firebase usando variáveis de ambiente com limpeza de espaços (.trim)
 // Isso previne erros comuns de copiar/colar na Vercel
@@ -336,6 +340,140 @@ export const attackBoss = async (guildId: string, damage: number, attackerName: 
         });
     } catch (e) {
         console.error("Error attacking boss", e);
+    }
+};
+
+// --- RANKING, PROFILE & PVP FUNCTIONS ---
+
+export const getGlobalRanking = async (classFilter?: string): Promise<PublicProfile[]> => {
+    if (!db) return [];
+    try {
+        const usersRef = collection(db, "users");
+        let q = query(usersRef, orderBy("gameState.totalXp", "desc"), limit(50));
+        
+        // Note: Filtering by nested field might require composite index in Firestore
+        // For simplicity/robustness without manual index creation, we filter in client for now if list is small,
+        // or we rely on just ordering by XP.
+        // If 'classTitle' index exists:
+        // if (classFilter && classFilter !== 'Todos') {
+        //    q = query(usersRef, where("gameState.classTitle", "==", classFilter), orderBy("gameState.totalXp", "desc"), limit(50));
+        // }
+
+        const snapshot = await getDocs(q);
+        const profiles: PublicProfile[] = snapshot.docs.map(doc => {
+            const data = doc.data();
+            const p = data.userProfile as UserProfile;
+            const g = data.gameState as GameState;
+            return {
+                uid: doc.id,
+                name: p.name,
+                level: g.level,
+                classTitle: g.classTitle || "NPC",
+                totalXp: g.totalXp,
+                avatarImage: p.avatarImage,
+                attributes: g.attributes
+            };
+        });
+
+        if (classFilter && classFilter !== 'Todos') {
+            return profiles.filter(p => p.classTitle === classFilter);
+        }
+        return profiles;
+    } catch (e) {
+        console.error("Error fetching ranking", e);
+        return [];
+    }
+};
+
+export const createDuel = async (challengerId: string, challengerName: string, opponentId: string, opponentName: string, activityId: string, targetAmount: number) => {
+    if (!db) return;
+    try {
+        const duelsRef = collection(db, "duels");
+        const newDuel: Omit<Duel, 'id'> = {
+            challengerId,
+            challengerName,
+            opponentId,
+            opponentName,
+            activityId,
+            targetAmount,
+            challengerProgress: 0,
+            opponentProgress: 0,
+            status: 'pending',
+            createdAt: Date.now()
+        };
+        await addDoc(duelsRef, newDuel);
+        alert("Desafio enviado!");
+    } catch (e) {
+        console.error("Error creating duel", e);
+        alert("Erro ao criar desafio.");
+    }
+};
+
+export const acceptDuel = async (duelId: string) => {
+    if (!db) return;
+    try {
+        const duelRef = doc(db, "duels", duelId);
+        await updateDoc(duelRef, { status: 'active' });
+    } catch (e) { console.error(e); }
+};
+
+export const fetchActiveDuels = (userId: string, callback: (duels: Duel[]) => void) => {
+    if (!db) return () => {};
+    
+    const duelsRef = collection(db, "duels");
+    // Queries for: I am challenger OR I am opponent
+    // Firestore OR queries are restricted, so we use 'onSnapshot' on a query that checks for involved parties
+    // We simplify by listening to where 'status' is not finished, then filtering in client for security rules simplicity
+    // Ideally: use 'or' query (Firebase v9+)
+    
+    const q = query(
+        duelsRef, 
+        or(
+            where("challengerId", "==", userId),
+            where("opponentId", "==", userId)
+        )
+    );
+
+    return onSnapshot(q, (snap) => {
+        const duels = snap.docs.map(d => ({ id: d.id, ...d.data() } as Duel));
+        callback(duels);
+    });
+};
+
+export const updateDuelProgress = async (userId: string, activityId: string, amount: number) => {
+    if (!db) return;
+    // This function needs to find active duels for this user + activity and increment
+    try {
+        const duelsRef = collection(db, "duels");
+        const q = query(
+            duelsRef, 
+            where("status", "==", "active"),
+            where("activityId", "==", activityId)
+        );
+        const snap = await getDocs(q);
+        
+        snap.forEach(async (d) => {
+            const duel = d.data() as Duel;
+            const duelRef = doc(db, "duels", d.id);
+            
+            if (duel.challengerId === userId || duel.opponentId === userId) {
+                 const isChallenger = duel.challengerId === userId;
+                 const newProgress = isChallenger ? duel.challengerProgress + amount : duel.opponentProgress + amount;
+                 
+                 const updateData: any = {};
+                 if (isChallenger) updateData.challengerProgress = newProgress;
+                 else updateData.opponentProgress = newProgress;
+
+                 if (newProgress >= duel.targetAmount) {
+                     updateData.status = 'finished';
+                     updateData.winnerId = userId;
+                 }
+                 
+                 await updateDoc(duelRef, updateData);
+            }
+        });
+    } catch (e) {
+        console.error("Error updating duel progress", e);
     }
 };
 

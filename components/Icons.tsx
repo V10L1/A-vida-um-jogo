@@ -1,4 +1,5 @@
 
+
 import React from 'react';
 import { 
   Footprints, 
@@ -51,7 +52,8 @@ import {
   Beer,
   Pizza,
   TriangleAlert,
-  Trash2
+  Trash2,
+  Globe // New
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -73,6 +75,7 @@ export const getIcon = (name: string, className?: string) => {
     case 'Moon': return <Moon {...props} />;
     case 'Clock': return <Clock {...props} />;
     case 'ArrowBigUp': return <ArrowBigUp {...props} />;
+    case 'Globe': return <Globe {...props} />; // New
     
     // Class Icons
     case 'Wind': return <Wind {...props} />;

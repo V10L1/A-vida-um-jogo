@@ -1,8 +1,9 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember } from './types';
+import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember, RPG_CLASSES, PublicProfile, Duel } from './types';
 import { getIcon } from './components/Icons';
 import { generateRpgFlavorText, NarratorTrigger } from './services/geminiService';
-import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail } from './firebase';
+import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail, getGlobalRanking, createDuel, fetchActiveDuels, acceptDuel, updateDuelProgress } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 
 // --- Helper Components ---
@@ -181,6 +182,18 @@ const ACTIVITY_CATEGORIES = [
   }
 ];
 
+// --- Configuração de Atrofia (Dias até perder pontos) ---
+const ATROPHY_THRESHOLDS: Record<Attribute, number> = {
+    STR: 14, // 1-2 semanas (Força cai rápido)
+    VIG: 14, // Cardio cai rápido
+    INT: 14, // Foco mental (1-2 semanas)
+    AGI: 18, // Coordenação (2-3 semanas)
+    END: 21, // Massa muscular/Resistência (3 semanas)
+    DEX: 25, // Luta/Mira (3-4 semanas)
+    CHA: 21, // Criatividade (3-4 semanas)
+    DRV: 30  // Direção (Longo prazo)
+};
+
 // --- Main App ---
 
 export default function App() {
@@ -202,6 +215,7 @@ export default function App() {
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [isQuestModalOpen, setIsQuestModalOpen] = useState(false);
   const [isGuildModalOpen, setIsGuildModalOpen] = useState(false);
+  const [isRankModalOpen, setIsRankModalOpen] = useState(false);
   
   // Profile Summary State
   const [summaryDate, setSummaryDate] = useState(new Date());
@@ -252,6 +266,12 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [guildTab, setGuildTab] = useState<'info' | 'chat' | 'raid'>('info');
 
+  // Ranking & PVP State
+  const [rankingList, setRankingList] = useState<PublicProfile[]>([]);
+  const [rankFilter, setRankFilter] = useState('Todos');
+  const [viewingProfile, setViewingProfile] = useState<PublicProfile | null>(null);
+  const [duels, setDuels] = useState<Duel[]>([]);
+  
   // History UI State
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
 
@@ -520,6 +540,67 @@ export default function App() {
     return 0; // Abaixo de 23.41 não ganha bônus de resistência passiva
   };
 
+  // --- LÓGICA DE ATROFIA DE ATRIBUTOS ---
+  const applyAtrophySystem = (state: GameState): { newState: GameState, lostAttributes: string[] } => {
+    const now = Date.now();
+    const lastCheck = state.lastAtrophyCheck || 0;
+    const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+    // Só roda o check 1 vez a cada 24h
+    if (now - lastCheck < ONE_DAY_MS) return { newState: state, lostAttributes: [] };
+
+    const newAttributes = { ...state.attributes };
+    const lostAttrs: string[] = [];
+
+    // Calcular a última vez que cada atributo foi treinado
+    const lastTrained: Record<string, number> = {};
+    
+    // Inicializar com 0 ou data de criação do log
+    const attributeKeys = Object.keys(newAttributes) as Attribute[];
+    attributeKeys.forEach(attr => lastTrained[attr] = 0);
+
+    // Varrer logs (do mais recente pro mais antigo)
+    for (const log of state.logs) {
+        const act = ACTIVITIES.find(a => a.id === log.activityId);
+        if (act) {
+            // Se a atividade usa o atributo, atualiza o timestamp se for mais recente
+            if (act.primaryAttribute && log.timestamp > (lastTrained[act.primaryAttribute] || 0)) {
+                lastTrained[act.primaryAttribute] = log.timestamp;
+            }
+            if (act.secondaryAttribute && log.timestamp > (lastTrained[act.secondaryAttribute] || 0)) {
+                lastTrained[act.secondaryAttribute] = log.timestamp;
+            }
+        }
+    }
+
+    // Verificar Limiares
+    attributeKeys.forEach(attr => {
+        const lastTime = lastTrained[attr];
+        // Se nunca treinou (0), assumimos que não atrofia ainda ou pega data atual para dar chance
+        // Vamos considerar que se é 0, o jogador é novo, então "agora" é o last time.
+        const effectiveLastTime = lastTime === 0 ? now : lastTime;
+        
+        const daysSince = (now - effectiveLastTime) / ONE_DAY_MS;
+        const threshold = ATROPHY_THRESHOLDS[attr];
+
+        if (daysSince > threshold) {
+            if (newAttributes[attr] > 0) {
+                newAttributes[attr] = Math.max(0, newAttributes[attr] - 1);
+                lostAttrs.push(attr);
+            }
+        }
+    });
+
+    return {
+        newState: {
+            ...state,
+            attributes: newAttributes,
+            lastAtrophyCheck: now
+        },
+        lostAttributes: lostAttrs
+    };
+  };
+
   // Helper para labels de data no histórico
   const getDayLabel = (timestamp: number) => {
     const date = new Date(timestamp);
@@ -556,16 +637,25 @@ export default function App() {
             parsedGame.lastDailyQuestGen, 
             parsedGame.lastWeeklyQuestGen
         );
-
-        setGameState(prev => ({ 
-            ...prev, 
+        
+        let loadedState: GameState = { 
             ...parsedGame,
             classTitle: currentClass,
             attributes: safeAttributes,
             quests: quests,
             lastDailyQuestGen: lastDaily,
             lastWeeklyQuestGen: lastWeekly
-        }));
+        };
+
+        // --- ATROPHY CHECK (LOCAL LOAD) ---
+        const { newState, lostAttributes } = applyAtrophySystem(loadedState);
+        loadedState = newState;
+        
+        if (lostAttributes.length > 0) {
+            setNarratorText(`A inatividade cobrou seu preço. Você sente seus atributos diminuírem: ${lostAttributes.join(', ')} (-1)`);
+        }
+
+        setGameState(loadedState);
 
         if (parsedGame.guildId && navigator.onLine) {
             subscribeToGuild(parsedGame.guildId, (guild, messages) => {
@@ -630,13 +720,22 @@ export default function App() {
                     cloudGame.lastWeeklyQuestGen
                 );
 
-                const newState = { 
+                let newState: GameState = { 
                     ...cloudGame,
                     attributes: safeAttributes,
                     quests,
                     lastDailyQuestGen: lastDaily,
                     lastWeeklyQuestGen: lastWeekly
                 };
+
+                // --- ATROPHY CHECK (CLOUD LOAD) ---
+                const { newState: atrophiedState, lostAttributes } = applyAtrophySystem(newState);
+                newState = atrophiedState;
+                
+                if (lostAttributes.length > 0) {
+                     setNarratorText(`A inatividade cobrou seu preço. Você sente seus atributos diminuírem: ${lostAttributes.join(', ')} (-1)`);
+                }
+
                 setGameState(newState); 
 
                 if (cloudGame.guildId) {
@@ -646,9 +745,14 @@ export default function App() {
                     });
                 }
 
+                // Start Listening to Duels
+                fetchActiveDuels(firebaseUser.uid, (activeDuels) => {
+                    setDuels(activeDuels);
+                });
+
                 // --- NARRATOR LOGIN TRIGGER ---
                 // Only trigger once per session load
-                if (!hasNarratorRunRef.current) {
+                if (!hasNarratorRunRef.current && lostAttributes.length === 0) { // Don't overwrite Atrophy message if it happened
                     hasNarratorRunRef.current = true;
                     updateNarrator(u, newState, undefined, 'login');
                 }
@@ -999,7 +1103,7 @@ export default function App() {
     }
   };
 
-  const handleLogActivity = () => {
+  const handleLogActivity = async () => {
     if (!selectedActivity || !user) return;
 
     let amount = 0;
@@ -1295,6 +1399,11 @@ export default function App() {
 
     setGameState(newState);
     
+    // Update PVP Duel Progress
+    if (currentUser) {
+        updateDuelProgress(currentUser.uid, selectedActivity.id, amount);
+    }
+    
     // Só fecha o modal se não for Gym (pois Gym tem o timer)
     if (selectedActivity.id !== 'gym') {
         setIsActivityModalOpen(false);
@@ -1316,7 +1425,7 @@ export default function App() {
         }
     }
   };
-//... (Resto do componente mantido)
+
   const handleDeleteLog = (logId: string) => {
     if (!window.confirm("Tem certeza que deseja excluir este registro? Os pontos e XP serão removidos.")) return;
 
@@ -1573,6 +1682,34 @@ export default function App() {
       await attackBoss(currentGuild.id, damage, user!.name);
   };
 
+  const handleLoadRanking = async () => {
+      if (!isOnline) {
+          alert("Precisa estar online para ver o Ranking.");
+          return;
+      }
+      const list = await getGlobalRanking(rankFilter);
+      setRankingList(list);
+  };
+  
+  useEffect(() => {
+      if (isRankModalOpen) {
+          handleLoadRanking();
+      }
+  }, [isRankModalOpen, rankFilter]);
+
+  const handleChallenge = async (opponent: PublicProfile) => {
+      if (!currentUser || !user) return;
+      // Exemplo fixo: Desafio de 50 flexoes
+      const act = ACTIVITIES.find(a => a.id === 'pushup');
+      if (!act) return;
+      
+      await createDuel(currentUser.uid, user.name, opponent.uid, opponent.name, 'pushup', 50);
+  };
+  
+  const handleAcceptDuel = async (duel: Duel) => {
+      await acceptDuel(duel.id);
+  };
+
   const getAvatarUrl = useMemo(() => {
     if (!user) return '';
     if (user.avatarImage) return user.avatarImage;
@@ -1784,6 +1921,9 @@ export default function App() {
             
             <div className="flex flex-col items-end gap-1">
                <div className="flex gap-2">
+                   <button onClick={(e) => { e.stopPropagation(); setIsRankModalOpen(true); }} className="relative text-[10px] bg-yellow-900/40 text-yellow-400 border border-yellow-700/50 px-2 py-1 rounded flex items-center gap-1 hover:bg-yellow-900/60 transition-colors">
+                        {getIcon("Globe", "w-3 h-3")} Rank
+                   </button>
                    <button onClick={(e) => { e.stopPropagation(); setIsGuildModalOpen(true); }} className="relative text-[10px] bg-indigo-900/40 text-indigo-400 border border-indigo-700/50 px-2 py-1 rounded flex items-center gap-1 hover:bg-indigo-900/60 transition-colors">
                         {getIcon("Shield", "w-3 h-3")} Clã
                    </button>
@@ -1839,6 +1979,44 @@ export default function App() {
              </div>
           </div>
         </div>
+        
+        {/* PVP Dashboard */}
+        {duels.length > 0 && (
+            <div className="bg-slate-900 border border-red-900/50 p-4 rounded-xl">
+                 <h2 className="text-sm font-bold text-red-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                    {getIcon("Swords", "w-4 h-4")} Duelos Ativos
+                </h2>
+                <div className="space-y-2">
+                    {duels.map(duel => (
+                        <div key={duel.id} className="bg-slate-800 p-3 rounded-lg flex items-center justify-between">
+                             <div className="text-xs w-full">
+                                 <div className="flex justify-between mb-1">
+                                     <span className="text-blue-400 font-bold">{duel.challengerName} ({duel.challengerProgress})</span>
+                                     <span className="text-slate-500 text-[10px]">vs</span>
+                                     <span className="text-red-400 font-bold">{duel.opponentName} ({duel.opponentProgress})</span>
+                                 </div>
+                                 <div className="text-[10px] text-slate-400 mb-2">{ACTIVITIES.find(a => a.id === duel.activityId)?.label} - Meta: {duel.targetAmount}</div>
+                                 
+                                 {duel.status === 'pending' ? (
+                                     duel.opponentId === currentUser?.uid ? (
+                                         <button onClick={() => handleAcceptDuel(duel)} className="w-full bg-green-600 text-white py-1 rounded text-[10px]">ACEITAR DUELO</button>
+                                     ) : (
+                                         <div className="w-full text-center text-yellow-500 text-[10px]">Aguardando Oponente...</div>
+                                     )
+                                 ) : duel.status === 'finished' ? (
+                                     <div className="w-full text-center font-bold text-yellow-400 text-[10px]">Vencedor: {duel.winnerId === duel.challengerId ? duel.challengerName : duel.opponentName}</div>
+                                 ) : (
+                                     <div className="w-full h-1 bg-slate-700 rounded-full flex">
+                                          <div className="bg-blue-500 h-full" style={{ width: `${(duel.challengerProgress / duel.targetAmount) * 50}%`}}></div>
+                                          <div className="bg-red-500 h-full ml-auto" style={{ width: `${(duel.opponentProgress / duel.targetAmount) * 50}%`}}></div>
+                                     </div>
+                                 )}
+                             </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        )}
 
         <div>
             <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
@@ -1864,749 +2042,779 @@ export default function App() {
                                     setTargetTool(
                                         act.id === 'shooting' ? 'curta' : 
                                         act.id === 'archery' ? 'recurvo' : 
-                                        act.id === 'knife_throw' ? 'sem_giro' : ''
+                                        act.id === 'knife_throw' ? 'sem_giro' :
+                                        ''
                                     );
                                 }
                             }}
-                            className="flex flex-col items-center justify-center p-3 bg-slate-800/60 hover:bg-slate-700 border border-slate-700 hover:border-blue-500/50 rounded-xl transition-all active:scale-95 group"
+                            className="bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-500 p-4 rounded-xl flex flex-col items-center justify-center gap-2 transition-all active:scale-95 group"
                         >
-                            <div className="mb-2 p-2 rounded-full bg-slate-900 group-hover:bg-slate-800 text-blue-400 group-hover:text-blue-300 transition-colors">
+                            <div className={`p-3 rounded-full bg-slate-900 group-hover:bg-slate-800 transition-colors ${category.color}`}>
                             {getIcon(act.icon)}
                             </div>
-                            <span className="font-semibold text-xs text-center">{act.label}</span>
-                            <span className="text-[10px] text-slate-400 mt-1">{act.xpPerUnit > 0 ? `+${isBuffActive ? Math.floor(act.xpPerUnit * gameState.activeBuff!.multiplier) : act.xpPerUnit} XP` : 'Debuff'}</span>
+                            <span className="text-xs font-bold text-center">{act.label}</span>
                         </button>
                         ))}
-                     </div>
+                    </div>
                 </div>
             ))}
         </div>
-
-        <div>
-          <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">Histórico</h2>
-          <div className="space-y-3">
-            {gameState.logs.length === 0 ? (
-              <div className="text-center py-8 text-slate-500/50 text-sm italic">Nenhuma atividade registrada hoje.</div>
-            ) : (
-                historyGroups.map(([actId, logs]) => {
-                    const latestLog = logs[0];
-                    const activity = ACTIVITIES.find(a => a.id === actId);
-                    const isExpanded = expandedHistoryId === actId;
-
-                    return (
-                        <div key={actId} className="bg-slate-800/40 border border-slate-700 rounded-lg overflow-hidden transition-all">
-                            {/* Header (Last Activity) */}
-                            <div 
-                                onClick={() => setExpandedHistoryId(isExpanded ? null : actId)}
-                                className="p-3 flex items-center justify-between hover:bg-slate-800/80 transition-colors cursor-pointer"
-                            >
-                                <div className="flex items-center gap-3">
-                                    <div className="p-2 bg-slate-900 rounded-full text-slate-400 relative">
-                                        {getIcon(activity?.icon || 'Activity', 'w-4 h-4')}
-                                        <span className="absolute -top-1 -right-1 bg-slate-700 text-[8px] text-white px-1 rounded-full border border-slate-900">
-                                            {logs.length}
-                                        </span>
-                                    </div>
-                                    <div>
-                                        <div className="font-medium text-sm flex items-center gap-2">
-                                            {activity?.label}
-                                            <span className="text-[10px] text-slate-500 font-normal">
-                                                {new Date(latestLog.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                                            </span>
-                                        </div>
-                                        {latestLog.details?.exercise ? (
-                                            <div className="text-xs text-blue-300">{latestLog.details.exercise} • {latestLog.details.weight}kg x {latestLog.details.reps}</div>
-                                        ) : latestLog.details?.pace ? (
-                                            <div className="text-xs text-emerald-300">{latestLog.details.distance}km • {latestLog.details.duration}</div>
-                                        ) : latestLog.details?.weapon ? (
-                                            <div className="text-xs text-amber-300 capitalize">{latestLog.details.weapon.replace('_', ' ')} • {latestLog.details.distance}m</div>
-                                        ) : (
-                                            <div className="text-xs text-slate-400/70">
-                                                {latestLog.amount} {activity?.unit}
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <div className={`font-bold text-sm ${latestLog.xpGained > 0 ? 'text-blue-400' : 'text-red-400'}`}>{latestLog.xpGained > 0 ? '+' : ''}{latestLog.xpGained} XP</div>
-                                    <div className={`transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`}>
-                                        {getIcon("ChevronRight", "w-4 h-4 text-slate-500")}
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Expanded History */}
-                            {isExpanded && logs.length > 0 && (
-                                <div className="bg-slate-900/30 border-t border-slate-700/50 p-2 space-y-1 animate-fade-in">
-                                    {logs.map((log, index) => {
-                                        const currentDate = getDayLabel(log.timestamp);
-                                        const prevLog = logs[index - 1]; // In the expanded view, prev logic is slightly different due to sort. But groups are sorted descending.
-                                        // Since logs are sorted descending, index-1 is actually the "newer" log visually if we render top-down, but chronologically next is index+1.
-                                        // However, standard history display:
-                                        // We want dividers when the day changes.
-                                        // logs[0] is newest. logs[last] is oldest.
-                                        // If index > 0, compare with index-1. If different day, show divider?
-                                        // Wait, logs are sorted descending.
-                                        // logs[0] = Today 10pm
-                                        // logs[1] = Today 8pm
-                                        // logs[2] = Yesterday
-                                        
-                                        const prevLogDate = index > 0 ? getDayLabel(logs[index - 1].timestamp) : null;
-                                        const showDivider = index === 0 || currentDate !== prevLogDate;
-
-                                        return (
-                                          <React.Fragment key={log.id}>
-                                              {showDivider && (
-                                                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-2 mb-1 pl-2 border-l-2 border-slate-700">
-                                                    {currentDate}
-                                                </div>
-                                              )}
-                                              <div className="flex justify-between items-center p-2 rounded hover:bg-slate-800/50 text-xs text-slate-400 group/item">
-                                                  <div>
-                                                      <span className="inline-block w-12 text-slate-500">{new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                                                      {log.details?.exercise ? (
-                                                          <span>{log.details.exercise} ({log.details.weight}kg x {log.details.reps})</span>
-                                                      ) : log.details?.pace ? (
-                                                          <span>{log.details.distance}km ({log.details.duration})</span>
-                                                      ) : log.details?.weapon ? (
-                                                          <span className="capitalize">{log.details.weapon.replace('_', ' ')} ({log.details.distance}m)</span>
-                                                      ) : (
-                                                          <span>{log.amount} {activity?.unit}</span>
-                                                      )}
-                                                  </div>
-                                                  <div className="flex items-center gap-3">
-                                                      <span className="text-blue-500/70">+{log.xpGained}</span>
-                                                      <button 
-                                                        onClick={(e) => { e.stopPropagation(); handleDeleteLog(log.id); }}
-                                                        className="text-slate-600 hover:text-red-400 transition-colors p-1"
-                                                        title="Excluir Registro"
-                                                      >
-                                                          {getIcon("Trash", "w-3 h-3")}
-                                                      </button>
-                                                  </div>
-                                              </div>
-                                          </React.Fragment>
-                                        );
-                                    })}
-                                </div>
-                            )}
-                        </div>
-                    );
-                })
-            )}
-          </div>
-        </div>
       </main>
 
-      {/* Activity Modal */}
-      <Modal isOpen={isActivityModalOpen} onClose={() => setIsActivityModalOpen(false)} title={selectedActivity?.label || 'Registrar'}>
-        {selectedActivity?.id === 'gym' && isResting ? (
-             // --- GYM TIMER VIEW ---
-             <div className="flex flex-col items-center justify-center space-y-6 py-6">
-                 <div className="text-center animate-pulse">
-                    <h3 className="text-slate-400 text-sm uppercase tracking-widest font-bold mb-2">Descanso</h3>
-                    <div className="text-6xl font-black text-white tabular-nums">
-                        {Math.floor(timerTimeLeft / 60).toString().padStart(2, '0')}:{(timerTimeLeft % 60).toString().padStart(2, '0')}
-                    </div>
-                 </div>
-                 <div className="flex gap-4">
-                     <button onClick={() => { setIsResting(false); setTimerTimeLeft(0); }} className="bg-red-900/50 hover:bg-red-900 text-red-200 px-6 py-3 rounded-xl font-bold flex items-center gap-2">
-                         {getIcon("X", "w-5 h-5")} Pular
-                     </button>
-                     <button onClick={() => setTimerTimeLeft(prev => prev + 30)} className="bg-blue-900/50 hover:bg-blue-900 text-blue-200 px-6 py-3 rounded-xl font-bold flex items-center gap-2">
-                         {getIcon("Plus", "w-5 h-5")} +30s
-                     </button>
-                 </div>
-                 <p className="text-xs text-slate-500">Respire fundo. A próxima série te espera.</p>
-             </div>
-        ) : selectedActivity?.id === 'gym' ? (
-             // --- GYM INPUT FORM ---
-             <div className="space-y-4">
-                 <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex items-center gap-3 mb-4">
-                     <div className="p-2 bg-slate-900 rounded-full text-blue-400">{getIcon("Biceps")}</div>
-                     <div className="text-sm text-slate-300">Registre sua série. Pontos: <br/> ≤6 reps (Força) • 7-9 (Híbrido) • ≥10 (Resistência)</div>
-                 </div>
-                 
-                 <div>
-                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Exercício</label>
-                     <input 
-                        type="text" 
-                        value={gymExercise} 
-                        onChange={(e) => setGymExercise(e.target.value)} 
-                        list="exercise-suggestions"
-                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" 
-                        placeholder="Ex: Supino Reto" 
-                        autoFocus 
-                     />
-                     {/* Autocomplete Datalist */}
-                     <datalist id="exercise-suggestions">
-                         {uniqueExercises.map((ex, index) => (
-                             <option key={index} value={ex} />
-                         ))}
-                     </datalist>
-                 </div>
+      {/* --- MODAIS --- */}
 
-                 <div className="grid grid-cols-2 gap-4">
-                     <div>
-                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Carga (kg)</label>
-                         <input type="number" value={gymWeight} onChange={(e) => setGymWeight(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" />
-                     </div>
-                     <div>
-                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Repetições</label>
-                         <input type="number" value={gymReps} onChange={(e) => setGymReps(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" />
-                     </div>
-                 </div>
-
-                 <div>
-                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1 flex items-center gap-1">{getIcon("Timer", "w-3 h-3")} Intervalo (min:seg)</label>
-                     <input type="time" value={gymRestTime} onChange={(e) => setGymRestTime(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
-                 </div>
-
-                 <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 mt-4">
-                     {getIcon("CheckCircle", "w-5 h-5")} Concluir Série
-                 </button>
-             </div>
-        ) : selectedActivity?.id === 'run' ? (
-             // --- RUN INPUT FORM ---
-             <div className="space-y-4">
-                 <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex items-center gap-3 mb-4">
-                     <div className="p-2 bg-slate-900 rounded-full text-blue-400">{getIcon("Wind")}</div>
-                     <div className="text-sm text-slate-300">
-                         Corra mais rápido para ganhar bônus!<br/>
-                         <span className="text-xs text-emerald-400">{'<'} 3:45/km (Elite)</span> • <span className="text-xs text-blue-400">{'<'} 4:30/km (Rápido)</span>
-                     </div>
-                 </div>
-
-                 <div className="grid grid-cols-2 gap-4">
-                     <div>
-                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Distância (km)</label>
-                         <input type="number" value={runDistance} onChange={(e) => setRunDistance(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" autoFocus />
-                     </div>
-                     <div>
-                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Tempo (MM:SS)</label>
-                         <input type="text" value={runDuration} onChange={(e) => {
-                             // Simple mask for MM:SS
-                             let v = e.target.value.replace(/[^0-9:]/g, '');
-                             if (v.length === 2 && !v.includes(':') && e.target.value.length > runDuration.length) v += ':';
-                             setRunDuration(v);
-                         }} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="00:00" maxLength={5} />
-                     </div>
-                 </div>
-
-                 {/* Pace Display */}
-                 <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 flex items-center justify-between">
-                     <div className="flex items-center gap-2 text-slate-400 text-sm">
-                         {getIcon("Gauge", "w-4 h-4")} Pace Estimado
-                     </div>
-                     <div className="text-xl font-bold text-white font-mono">
-                         {currentPace} <span className="text-xs text-slate-500 font-sans">/km</span>
-                     </div>
-                 </div>
-
-                 <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 mt-4">
-                     {getIcon("CheckCircle", "w-5 h-5")} Registrar Corrida
-                 </button>
-             </div>
-        ) : (selectedActivity?.id === 'shooting' || selectedActivity?.id === 'archery' || selectedActivity?.id === 'knife_throw') ? (
-             // --- TARGET PRACTICE INPUT FORM (Shooting, Archery, Knife) ---
-            <div className="space-y-4">
-                <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 mb-2">
-                    <p className="text-xs text-slate-400">XP calculado por Distância, Equipamento e Precisão.</p>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                     <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
-                            {selectedActivity.id === 'shooting' ? 'Arma' : selectedActivity.id === 'archery' ? 'Arco' : 'Técnica'}
-                        </label>
-                        <select value={targetTool} onChange={(e) => setTargetTool(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none">
-                            {selectedActivity.id === 'shooting' && (
-                                <>
-                                    <option value="curta">Arma Curta</option>
-                                    <option value="longa">Arma Longa</option>
-                                    <option value="espingarda">Espingarda</option>
-                                    <option value="rifle">Rifle</option>
-                                </>
-                            )}
-                            {selectedActivity.id === 'archery' && (
-                                <>
-                                    <option value="recurvo">Arco Recurvo</option>
-                                    <option value="composto">Arco Composto</option>
-                                    <option value="longbow">Longbow (Tradicional)</option>
-                                    <option value="besta">Besta</option>
-                                </>
-                            )}
-                            {selectedActivity.id === 'knife_throw' && (
-                                <>
-                                    <option value="sem_giro">Sem Giro (No Spin)</option>
-                                    <option value="meio_giro">Meio Giro (Half Spin)</option>
-                                    <option value="giro_completo">Giro Completo (Full Spin)</option>
-                                    <option value="militar">Estilo Militar</option>
-                                </>
-                            )}
-                        </select>
-                     </div>
-                     <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Distância (m)</label>
-                        <input type="number" value={targetDistance} onChange={(e) => setTargetDistance(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: 10" />
-                     </div>
-                </div>
-
-                <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 flex items-center gap-1">{getIcon("Target", "w-3 h-3")} Registro de Acertos</label>
-                    <div className="grid grid-cols-3 gap-2">
-                        <div className="flex flex-col">
-                            <label className="text-[10px] text-red-400 uppercase font-bold">Centro (10)</label>
-                            <input type="number" value={targetHits.center} onChange={(e) => setTargetHits({...targetHits, center: Number(e.target.value)})} className="bg-slate-950 border border-red-900/50 rounded p-2 text-center text-white" />
-                        </div>
-                        <div className="flex flex-col">
-                            <label className="text-[10px] text-orange-400 uppercase font-bold">1º Cont. (9)</label>
-                            <input type="number" value={targetHits.c1} onChange={(e) => setTargetHits({...targetHits, c1: Number(e.target.value)})} className="bg-slate-950 border border-orange-900/50 rounded p-2 text-center text-white" />
-                        </div>
-                        <div className="flex flex-col">
-                            <label className="text-[10px] text-yellow-400 uppercase font-bold">2º Cont. (8)</label>
-                            <input type="number" value={targetHits.c2} onChange={(e) => setTargetHits({...targetHits, c2: Number(e.target.value)})} className="bg-slate-950 border border-yellow-900/50 rounded p-2 text-center text-white" />
-                        </div>
-                        <div className="flex flex-col">
-                            <label className="text-[10px] text-slate-400 uppercase font-bold">3º Cont. (7)</label>
-                            <input type="number" value={targetHits.c3} onChange={(e) => setTargetHits({...targetHits, c3: Number(e.target.value)})} className="bg-slate-950 border border-slate-700 rounded p-2 text-center text-white" />
-                        </div>
-                        <div className="flex flex-col">
-                            <label className="text-[10px] text-slate-500 uppercase font-bold">Dentro (Ext)</label>
-                            <input type="number" value={targetHits.outer} onChange={(e) => setTargetHits({...targetHits, outer: Number(e.target.value)})} className="bg-slate-950 border border-slate-700 rounded p-2 text-center text-white" />
-                        </div>
-                    </div>
-                </div>
-
-                <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 mt-4">
-                     {getIcon("Crosshair", "w-5 h-5")} Registrar Disparos
-                 </button>
-            </div>
-        ) : (
-            // --- STANDARD INPUT ---
-            <div className="space-y-6">
-            <div className="text-center space-y-2">
-                <div className="inline-block p-4 bg-slate-950 rounded-full text-blue-400 mb-2">{selectedActivity && getIcon(selectedActivity.icon, "w-8 h-8")}</div>
-                <p className="text-slate-300 text-sm">
-                    {selectedActivity?.category === 'bad_habit' ? (
-                        <span className="text-red-400 font-bold">AVISO: Isso aplicará um Debuff no seu ganho de XP.</span>
-                    ) : (
-                        <>Quanto você realizou? <br/><span className="text-blue-400 text-xs">Base: {selectedActivity?.xpPerUnit} XP {isBuffActive && <span className="text-purple-400 ml-1">x {gameState.activeBuff?.multiplier} (Buff)</span>}</span></>
-                    )}
-                </p>
-                {selectedActivity?.primaryAttribute && (
-                    <div className="flex justify-center gap-2 mt-2">
-                        <span className="text-emerald-400 text-xs font-bold uppercase tracking-wider border border-emerald-900 bg-emerald-900/20 px-2 py-1 rounded">
-                            + {selectedActivity.primaryAttribute}
-                        </span>
-                        {selectedActivity.secondaryAttribute && (
-                            <span className="text-emerald-400/70 text-xs font-bold uppercase tracking-wider border border-emerald-900/50 bg-emerald-900/10 px-2 py-1 rounded">
-                                + {selectedActivity.secondaryAttribute}
-                            </span>
-                        )}
-                    </div>
-                )}
-            </div>
-            <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Quantidade ({selectedActivity?.unit})</label>
-                <input type="number" value={inputAmount} onChange={(e) => setInputAmount(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-4 text-2xl text-center text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" autoFocus />
-            </div>
-            <button onClick={handleLogActivity} className={`w-full text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg ${selectedActivity?.category === 'bad_habit' ? 'bg-red-600 hover:bg-red-500 shadow-red-900/20' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20'}`}>
-                {getIcon(selectedActivity?.category === 'bad_habit' ? "TriangleAlert" : "Plus", "w-5 h-5")} 
-                {selectedActivity?.category === 'bad_habit' ? "Confirmar (Aplicar Debuff)" : "Confirmar"}
-            </button>
-            </div>
-        )}
-      </Modal>
-
-      {/* Sleep Modal */}
-      <Modal isOpen={isSleepModalOpen} onClose={() => setIsSleepModalOpen(false)} title="Descanso do Guerreiro">
-        <div className="space-y-6">
-           <div className="bg-indigo-900/20 border border-indigo-800 rounded-lg p-4 text-sm text-indigo-200"><p>O sono restaura suas energias. Ganhe <strong>+2% XP</strong> por hora (máx 9h). Horas extras causam fadiga.</p></div>
-           <div className="grid grid-cols-2 gap-4">
-              <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Dormiu às</label><input type="time" value={bedTime} onChange={(e) => setBedTime(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"/></div>
-              <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Acordou às</label><input type="time" value={wakeTime} onChange={(e) => setWakeTime(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"/></div>
-           </div>
-           <button onClick={handleRegisterSleep} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-indigo-900/20">{getIcon("Moon", "w-5 h-5")} Registrar Descanso</button>
-        </div>
-      </Modal>
-
-      {/* Quest Modal */}
-      <Modal isOpen={isQuestModalOpen} onClose={() => setIsQuestModalOpen(false)} title="Quests e Contratos">
-        <div className="space-y-6">
-             {/* Daily Section */}
-             <div>
-                <h4 className="text-amber-400 font-bold uppercase text-xs tracking-widest mb-2 flex items-center gap-2">{getIcon("Scroll", "w-4 h-4")} Diárias</h4>
-                <div className="space-y-4">
-                    {/* Missões Básicas (Sem Atributos / Sono) */}
-                    {basicDailyQuests.length > 0 && (
-                        <div className="space-y-2">
-                            <h5 className="text-[10px] text-slate-500 uppercase font-bold pl-1">Hábitos Essenciais</h5>
-                            {basicDailyQuests.map(quest => {
-                                const act = ACTIVITIES.find(a => a.id === quest.activityId);
-                                const isComplete = quest.currentAmount >= quest.targetAmount;
-                                const label = quest.activityId === 'sleep' ? 'Registrar Sono' : act?.label;
-                                const unit = quest.activityId === 'sleep' ? 'noite' : act?.unit;
-
-                                return (
-                                    <div key={quest.id} className={`p-3 rounded-lg border flex flex-col gap-2 ${isComplete ? 'bg-emerald-900/20 border-emerald-700' : 'bg-slate-800 border-slate-700'}`}>
-                                        <div className="flex justify-between items-center">
-                                            <span className="text-sm font-semibold text-slate-200">{label}</span>
-                                            <span className="text-xs text-amber-400 font-bold">+{quest.xpReward} XP</span>
-                                        </div>
-                                        <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
-                                            <div className="bg-amber-500 h-full transition-all" style={{ width: `${Math.min(100, (quest.currentAmount / quest.targetAmount) * 100)}%` }}></div>
-                                        </div>
-                                        <div className="flex justify-between items-center text-xs text-slate-400">
-                                            <span>{quest.currentAmount} / {quest.targetAmount} {unit}</span>
-                                            {isComplete && !quest.isClaimed && (
-                                                <button onClick={() => handleClaimQuest(quest.id)} className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded animate-pulse">
-                                                    Resgatar
-                                                </button>
-                                            )}
-                                            {quest.isClaimed && <span className="text-emerald-500 font-bold flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Completo</span>}
-                                        </div>
-                                    </div>
-                                 );
-                            })}
-                        </div>
-                    )}
-                    
-                    {/* Missões Avançadas (Com Atributos) */}
-                    {advancedDailyQuests.length > 0 && (
-                        <div className="space-y-2">
-                             <h5 className="text-[10px] text-slate-500 uppercase font-bold pl-1">Treino & Classe</h5>
-                             {advancedDailyQuests.map(quest => {
-                                 const act = ACTIVITIES.find(a => a.id === quest.activityId);
-                                 const isComplete = quest.currentAmount >= quest.targetAmount;
-                                 return (
-                                    <div key={quest.id} className={`p-3 rounded-lg border flex flex-col gap-2 ${isComplete ? 'bg-emerald-900/20 border-emerald-700' : 'bg-slate-800 border-slate-700'}`}>
-                                        <div className="flex justify-between items-center">
-                                            <span className="text-sm font-semibold text-slate-200">{act?.label}</span>
-                                            <span className="text-xs text-amber-400 font-bold">+{quest.xpReward} XP</span>
-                                        </div>
-                                        <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
-                                            <div className="bg-amber-500 h-full transition-all" style={{ width: `${Math.min(100, (quest.currentAmount / quest.targetAmount) * 100)}%` }}></div>
-                                        </div>
-                                        <div className="flex justify-between items-center text-xs text-slate-400">
-                                            <span>{quest.currentAmount} / {quest.targetAmount} {act?.unit}</span>
-                                            {isComplete && !quest.isClaimed && (
-                                                <button onClick={() => handleClaimQuest(quest.id)} className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded animate-pulse">
-                                                    Resgatar
-                                                </button>
-                                            )}
-                                            {quest.isClaimed && <span className="text-emerald-500 font-bold flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Completo</span>}
-                                        </div>
-                                    </div>
-                                 );
-                             })}
-                        </div>
-                    )}
-                </div>
-             </div>
-             
-             {/* Weekly Section */}
-             <div>
-                <h4 className="text-purple-400 font-bold uppercase text-xs tracking-widest mb-2 flex items-center gap-2">{getIcon("Trophy", "w-4 h-4")} Semanais</h4>
-                <div className="space-y-3">
-                    {weeklyQuests.map(quest => {
-                         const act = ACTIVITIES.find(a => a.id === quest.activityId);
-                         const isComplete = quest.currentAmount >= quest.targetAmount;
-                         const label = quest.activityId === 'sleep' ? 'Registrar Sono' : act?.label;
-                         const unit = quest.activityId === 'sleep' ? 'noite' : act?.unit;
-
-                         return (
-                            <div key={quest.id} className={`p-3 rounded-lg border flex flex-col gap-2 ${isComplete ? 'bg-emerald-900/20 border-emerald-700' : 'bg-slate-800 border-slate-700'}`}>
-                                <div className="flex justify-between items-center">
-                                    <span className="text-sm font-semibold text-slate-200">{label}</span>
-                                    <span className="text-xs text-purple-400 font-bold">+{quest.xpReward} XP</span>
-                                </div>
-                                <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
-                                    <div className="bg-purple-500 h-full transition-all" style={{ width: `${Math.min(100, (quest.currentAmount / quest.targetAmount) * 100)}%` }}></div>
-                                </div>
-                                <div className="flex justify-between items-center text-xs text-slate-400">
-                                    <span>{quest.currentAmount} / {quest.targetAmount} {unit}</span>
-                                    {isComplete && !quest.isClaimed && (
-                                        <button onClick={() => handleClaimQuest(quest.id)} className="px-3 py-1 bg-purple-500 hover:bg-purple-400 text-white font-bold rounded animate-pulse">
-                                            Resgatar
-                                        </button>
-                                    )}
-                                    {quest.isClaimed && <span className="text-emerald-500 font-bold flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Completo</span>}
-                                </div>
-                            </div>
-                         );
-                    })}
-                </div>
-             </div>
-        </div>
-      </Modal>
-
-      {/* Guild Modal */}
-      <Modal isOpen={isGuildModalOpen} onClose={() => setIsGuildModalOpen(false)} title="Salão da Guilda" large>
-           {!gameState.guildId ? (
-               <div className="space-y-8 text-center py-6">
-                   <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700">
-                       <h3 className="text-xl font-bold text-white mb-2">Entrar em uma Guilda</h3>
-                       <p className="text-slate-400 text-sm mb-4">Digite o ID da guilda para se juntar aos seus aliados.</p>
-                       <div className="flex gap-2">
-                           <input value={guildInputId} onChange={(e) => setGuildInputId(e.target.value)} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg p-3 text-white outline-none" placeholder="ID da Guilda" />
-                           <button onClick={handleJoinGuild} className="bg-blue-600 hover:bg-blue-500 px-4 rounded-lg font-bold">Entrar</button>
+      {/* MODAL RANKING GLOBAL */}
+      <Modal isOpen={isRankModalOpen} onClose={() => { setIsRankModalOpen(false); setViewingProfile(null); }} title="Ranking Global" large>
+           {viewingProfile ? (
+               // PUBLIC PROFILE VIEW
+               <div className="space-y-6">
+                   <button onClick={() => setViewingProfile(null)} className="text-xs text-blue-400 flex items-center gap-1 mb-4">
+                       {getIcon("ChevronLeft", "w-4 h-4")} Voltar ao Ranking
+                   </button>
+                   
+                   <div className="flex flex-col items-center text-center">
+                       <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-slate-700 mb-3">
+                           <img 
+                               src={viewingProfile.avatarImage || `https://api.dicebear.com/9.x/micah/svg?seed=${viewingProfile.name.replace(/\s/g, '')}`} 
+                               alt={viewingProfile.name} 
+                               className="w-full h-full object-cover" 
+                           />
                        </div>
+                       <h2 className="text-2xl font-bold text-white">{viewingProfile.name}</h2>
+                       <span className="text-sm text-blue-400 font-bold uppercase tracking-wider">{viewingProfile.classTitle} • Lvl {viewingProfile.level}</span>
+                   </div>
+
+                   <div className="bg-slate-950/50 p-4 rounded-xl border border-slate-800">
+                       <h3 className="text-xs font-bold text-slate-400 uppercase mb-2 text-center">Atributos</h3>
+                       <RadarChart attributes={viewingProfile.attributes} />
                    </div>
                    
-                   <div className="flex items-center gap-4 before:h-px before:flex-1 before:bg-slate-700 after:h-px after:flex-1 after:bg-slate-700">
-                       <span className="text-slate-500 text-xs font-bold uppercase">OU</span>
-                   </div>
-
-                   <div className="bg-indigo-900/20 p-6 rounded-2xl border border-indigo-800">
-                       <h3 className="text-xl font-bold text-indigo-300 mb-2">Fundar nova Guilda</h3>
-                       <p className="text-indigo-200/60 text-sm mb-4">Crie seu próprio legado.</p>
-                       <div className="flex gap-2">
-                           <input value={guildCreateName} onChange={(e) => setGuildCreateName(e.target.value)} className="flex-1 bg-slate-950 border border-indigo-800/50 rounded-lg p-3 text-white outline-none" placeholder="Nome da Guilda" />
-                           <button onClick={handleCreateGuild} className="bg-indigo-600 hover:bg-indigo-500 px-4 rounded-lg font-bold text-white">Criar</button>
-                       </div>
-                   </div>
-               </div>
-           ) : currentGuild ? (
-               <div className="flex flex-col h-[60vh]">
-                   {/* Guild Header */}
-                   <div className="flex justify-between items-center mb-4 bg-slate-800 p-3 rounded-lg">
-                       <div>
-                           <h2 className="text-xl font-bold text-white flex items-center gap-2">{getIcon("Shield", "w-5 h-5 text-indigo-400")} {currentGuild.name}</h2>
-                           <p className="text-xs text-slate-400">Nível {currentGuild.level} • ID: <span className="select-all font-mono bg-slate-900 px-1 rounded">{currentGuild.id}</span></p>
-                       </div>
-                       <div className="flex gap-2">
-                           <button onClick={() => setGuildTab('info')} className={`p-2 rounded ${guildTab === 'info' ? 'bg-indigo-600' : 'bg-slate-700'}`}>{getIcon("Users", "w-4 h-4")}</button>
-                           <button onClick={() => setGuildTab('chat')} className={`p-2 rounded ${guildTab === 'chat' ? 'bg-indigo-600' : 'bg-slate-700'}`}>{getIcon("MessageSquare", "w-4 h-4")}</button>
-                           <button onClick={() => setGuildTab('raid')} className={`p-2 rounded ${guildTab === 'raid' ? 'bg-red-600' : 'bg-slate-700'}`}>{getIcon("Skull", "w-4 h-4")}</button>
-                       </div>
-                   </div>
-
-                   {/* Guild Content */}
-                   <div className="flex-1 overflow-y-auto min-h-0 bg-slate-950/30 rounded-xl border border-slate-800 p-4">
-                       
-                       {guildTab === 'info' && (
-                           <div className="space-y-3">
-                               <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Membros</h3>
-                               {Object.values(currentGuild.members).map((member: GuildMember) => (
-                                   <div key={member.uid} className="flex items-center justify-between p-2 bg-slate-800/50 rounded-lg">
-                                       <div className="flex items-center gap-3">
-                                           <div className="w-8 h-8 bg-slate-700 rounded-full overflow-hidden">
-                                               {member.avatar ? <img src={member.avatar} className="w-full h-full object-cover"/> : <div className="flex items-center justify-center h-full text-xs">?</div>}
-                                           </div>
-                                           <div>
-                                               <div className="font-bold text-sm text-slate-200">{member.name}</div>
-                                               <div className="text-[10px] text-blue-400 uppercase">{member.classTitle} • Lvl {member.level}</div>
-                                           </div>
-                                       </div>
-                                       {member.role === 'leader' && <span className="text-yellow-500">{getIcon("Crown", "w-4 h-4")}</span>}
-                                   </div>
-                               ))}
-                           </div>
-                       )}
-
-                       {guildTab === 'chat' && (
-                           <div className="flex flex-col h-full">
-                               <div className="flex-1 overflow-y-auto space-y-3 pr-2">
-                                   {chatMessages.map(msg => (
-                                       <div key={msg.id} className={`flex flex-col ${msg.senderId === currentUser?.uid ? 'items-end' : 'items-start'}`}>
-                                           <div className={`max-w-[80%] rounded-lg p-2 text-sm ${msg.type === 'system' ? 'bg-yellow-900/30 border border-yellow-800 text-yellow-200 w-full text-center' : msg.senderId === currentUser?.uid ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
-                                               {msg.type !== 'system' && <span className="text-[10px] opacity-50 block mb-0.5">{msg.senderName}</span>}
-                                               {msg.text}
-                                           </div>
-                                       </div>
-                                   ))}
-                                   <div ref={chatEndRef} />
-                               </div>
-                               <div className="mt-4 flex gap-2">
-                                   <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="flex-1 bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-white" placeholder="Mensagem..." />
-                                   <button onClick={handleSendMessage} className="bg-indigo-600 p-2 rounded-lg">{getIcon("ChevronRight")}</button>
-                               </div>
-                           </div>
-                       )}
-
-                       {guildTab === 'raid' && currentGuild.boss && (
-                           <div className="text-center space-y-6">
-                               <div className="animate-pulse-slow">
-                                   <div className="text-6xl mb-2">{currentGuild.boss.image}</div>
-                                   <h3 className="text-2xl font-black text-red-500 uppercase tracking-widest">{currentGuild.boss.name}</h3>
-                                   <p className="text-red-400 text-xs font-bold">Nível {currentGuild.boss.level}</p>
-                               </div>
-                               
-                               <div className="relative pt-1 px-4">
-                                    <div className="flex mb-2 items-center justify-between">
-                                        <span className="text-xs font-bold text-red-200">{currentGuild.boss.currentHp} / {currentGuild.boss.maxHp} HP</span>
-                                    </div>
-                                    <div className="w-full bg-slate-900 rounded-full h-6 overflow-hidden border border-slate-700">
-                                        <div
-                                            className="h-full bg-gradient-to-r from-red-600 to-red-500 transition-all duration-300 ease-out"
-                                            style={{ width: `${(currentGuild.boss.currentHp / currentGuild.boss.maxHp) * 100}%` }}
-                                        ></div>
-                                    </div>
-                               </div>
-
-                               <div className="bg-slate-900/50 p-4 rounded-xl border border-red-900/30">
-                                   <p className="text-sm text-slate-300 mb-4">Realize exercícios de combate para causar dano!</p>
-                                   <button onClick={handleAttackBoss} className="w-full bg-red-700 hover:bg-red-600 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 shadow-lg shadow-red-900/20 active:scale-95 transition-transform">
-                                       {getIcon("Swords", "w-5 h-5")} ATACAR (Gastar Energia)
-                                   </button>
-                                   <p className="text-[10px] text-slate-500 mt-2">Dano baseado no seu Nível ({gameState.level * 2} + 10)</p>
-                               </div>
-                           </div>
-                       )}
-                   </div>
+                   {currentUser && (
+                       <button 
+                         onClick={() => {
+                             handleChallenge(viewingProfile);
+                             setIsRankModalOpen(false);
+                             setViewingProfile(null);
+                         }}
+                         className="w-full bg-red-600 hover:bg-red-700 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2"
+                       >
+                           {getIcon("Swords")} Desafiar para Duelo
+                       </button>
+                   )}
                </div>
            ) : (
-               <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div></div>
+               // RANKING LIST
+               <div>
+                   <div className="flex gap-2 overflow-x-auto pb-4 mb-2">
+                       {['Todos', ...RPG_CLASSES].map(c => (
+                           <button 
+                             key={c}
+                             onClick={() => setRankFilter(c)}
+                             className={`px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${rankFilter === c ? 'bg-yellow-500 text-black' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                           >
+                               {c}
+                           </button>
+                       ))}
+                   </div>
+                   
+                   <div className="space-y-2">
+                       {rankingList.length === 0 ? (
+                           <p className="text-center text-slate-500 py-8">Carregando guerreiros...</p>
+                       ) : (
+                           rankingList.map((p, index) => (
+                               <div key={p.uid} onClick={() => setViewingProfile(p)} className="bg-slate-800 p-3 rounded-lg flex items-center gap-3 cursor-pointer hover:bg-slate-700 transition-colors border border-transparent hover:border-slate-600">
+                                   <div className="flex-shrink-0 w-8 h-8 flex items-center justify-center font-black text-slate-500 bg-slate-900 rounded-full">
+                                       {index + 1}
+                                   </div>
+                                   <div className="w-10 h-10 rounded-full overflow-hidden bg-slate-900">
+                                       <img src={p.avatarImage || `https://api.dicebear.com/9.x/micah/svg?seed=${p.name.replace(/\s/g, '')}`} className="w-full h-full object-cover" />
+                                   </div>
+                                   <div className="flex-1 min-w-0">
+                                       <h4 className="font-bold text-white truncate">{p.name}</h4>
+                                       <p className="text-xs text-blue-400">{p.classTitle} • Lvl {p.level}</p>
+                                   </div>
+                                   <div className="text-right">
+                                       <span className="text-xs font-bold text-yellow-500">{Math.floor(p.totalXp / 1000)}k XP</span>
+                                   </div>
+                               </div>
+                           ))
+                       )}
+                   </div>
+               </div>
            )}
       </Modal>
 
-      {/* User Profile Modal */}
-      <Modal isOpen={isProfileModalOpen} onClose={() => { setIsProfileModalOpen(false); setIsEditingProfile(false); }} title="Ficha do Personagem" large>
-          <div className="flex flex-col items-center">
-             
-             {/* Edit Button Header */}
-             <div className="w-full flex justify-end mb-[-40px] z-10 relative">
-                 {!isEditingProfile ? (
-                    <button onClick={() => setIsEditingProfile(true)} className="text-slate-400 hover:text-white p-2 rounded bg-slate-800 border border-slate-700">
-                        {getIcon("Pencil", "w-4 h-4")}
-                    </button>
-                 ) : (
-                    <button onClick={() => setIsEditingProfile(false)} className="text-red-400 hover:text-red-300 p-2 rounded bg-slate-800 border border-slate-700">
-                        {getIcon("X", "w-4 h-4")}
-                    </button>
-                 )}
-             </div>
-
-             <div className="relative mb-4">
-                <div className="w-32 h-32 rounded-full border-4 border-slate-700 bg-slate-800 overflow-hidden shadow-2xl relative z-0">
-                    <img src={getAvatarUrl} alt="Avatar Grande" className="w-full h-full object-cover" />
-                </div>
-                {isEditingProfile && (
-                    <>
-                        <input 
-                            type="file" 
-                            accept="image/*" 
-                            ref={fileInputRef} 
-                            onChange={handleImageUpload} 
-                            className="hidden" 
-                        />
-                        <button 
-                            onClick={() => fileInputRef.current?.click()}
-                            className="absolute bottom-0 right-0 bg-blue-600 hover:bg-blue-500 text-white p-2 rounded-full shadow-lg border border-slate-900 transition-colors z-20"
-                        >
-                            {getIcon("Camera", "w-5 h-5")}
-                        </button>
-                    </>
-                )}
-             </div>
-
-             {isEditingProfile ? (
-                 <form onSubmit={handleUpdateProfile} className="w-full space-y-4 mb-6">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Profissão (Vida Real)</label>
-                      <input name="profession" defaultValue={user.profession} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:ring-2 focus:ring-blue-500" />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Gênero</label>
-                            <select name="gender" defaultValue={user.gender} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:ring-2 focus:ring-blue-500">
-                                <option value="Masculino">Masculino</option>
-                                <option value="Feminino">Feminino</option>
-                                <option value="Outros">Outros</option>
-                            </select>
-                        </div>
-                        <div>
-                             <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Altura (cm)</label>
-                             <input type="number" name="height" defaultValue={user.height} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:ring-2 focus:ring-blue-500" />
-                        </div>
-                    </div>
-                    <div>
-                         <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Peso (kg)</label>
-                         <input type="number" step="0.1" name="weight" defaultValue={user.weight} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:ring-2 focus:ring-blue-500" />
-                    </div>
-                    <button type="submit" className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-2 rounded-lg flex items-center justify-center gap-2">
-                        {getIcon("Save", "w-4 h-4")} Salvar Alterações
-                    </button>
-                 </form>
-             ) : (
-                <>
-                    <h2 className="text-2xl font-bold text-white">{user.name}</h2>
-                    <p className="text-blue-400 font-bold uppercase tracking-widest text-sm mb-1">{gameState.classTitle}</p>
-                    <p className="text-slate-500 text-xs mb-6">Nível {gameState.level} • {user.profession} (Vida Real)</p>
-                    <div className="flex gap-4 text-xs text-slate-400 mb-6 border-t border-b border-slate-800 py-2 w-full justify-center bg-slate-800/20">
-                        <span>{user.height} cm</span>
-                        <span>•</span>
-                        <span>{user.weight} kg</span>
-                        <span>•</span>
-                        <span>{user.gender}</span>
-                    </div>
-                </>
-             )}
-             
-             <div className="w-full bg-slate-950/50 rounded-2xl p-4 border border-slate-800 mb-6">
-                <h3 className="text-center text-xs font-bold text-slate-500 uppercase mb-4">Atributos (Stats)</h3>
-                <RadarChart attributes={gameState.attributes} />
-             </div>
-
-             <div className="grid grid-cols-2 w-full gap-4 text-center mb-6">
-                 <div className="bg-slate-800 p-3 rounded-lg">
-                    <div className="text-xs text-slate-500 uppercase">XP Total</div>
-                    <div className="text-xl font-bold text-white">{gameState.totalXp}</div>
-                 </div>
-                 <div className="bg-slate-800 p-3 rounded-lg">
-                    <div className="text-xs text-slate-500 uppercase">Missões</div>
-                    <div className="text-xl font-bold text-white">{gameState.logs.length}</div>
-                 </div>
-             </div>
-
-             {/* Daily Summary Section */}
-             <div className="w-full bg-slate-800/40 rounded-xl border border-slate-700 p-4">
-                 <div className="flex items-center justify-between mb-4">
-                     <button onClick={() => changeSummaryDate(-1)} className="p-1 hover:bg-slate-700 rounded text-slate-400">{getIcon("ChevronLeft")}</button>
-                     <div className="flex items-center gap-2 text-sm font-bold text-white uppercase tracking-wider">
-                         {getIcon("Calendar", "w-4 h-4 text-blue-400")}
-                         {summaryDate.toLocaleDateString()}
-                     </div>
-                     <button onClick={() => changeSummaryDate(1)} className="p-1 hover:bg-slate-700 rounded text-slate-400">{getIcon("ChevronRight")}</button>
-                 </div>
-
-                 {dailySummary.count > 0 ? (
-                     <div className="space-y-3">
-                         <div className="text-center mb-3">
-                             <span className="text-xs text-slate-500 uppercase font-bold">XP do Dia</span>
-                             <div className="text-xl font-bold text-emerald-400">+{dailySummary.totalXp} XP</div>
-                         </div>
-                         <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                             {dailySummary.list.map((item, idx) => (
-                                 <div key={idx} className="flex justify-between items-start bg-slate-900/50 p-2 rounded text-xs">
-                                     <div>
-                                         <div className="font-bold text-slate-300 flex items-center gap-2">
-                                            {getIcon(item.activity.icon, "w-3 h-3 text-slate-500")}
-                                            {item.activity.label} <span className="text-slate-600">x{item.count}</span>
-                                         </div>
-                                         {item.details.length > 0 && (
-                                             <div className="text-[10px] text-slate-500 mt-1 pl-5">
-                                                 {item.details.slice(0, 3).join(", ")}
-                                                 {item.details.length > 3 && "..."}
-                                             </div>
-                                         )}
-                                     </div>
-                                     <div className="text-slate-400">
-                                         {item.totalAmount} {item.activity.unit}
-                                     </div>
-                                 </div>
-                             ))}
-                         </div>
-                     </div>
-                 ) : (
-                     <div className="text-center py-6 text-slate-500 text-xs italic">
-                         Nenhum registro neste dia.
-                     </div>
-                 )}
-             </div>
-
+      {/* ACTIVITY MODAL */}
+      <Modal isOpen={isActivityModalOpen} onClose={() => { setIsActivityModalOpen(false); setInputAmount(''); }} title={selectedActivity?.label || 'Registrar Atividade'}>
+          {/* ... (Existing Activity Modal Content - Keeping it same structure) */}
+          <div className="space-y-6">
+          <div className="flex justify-center mb-4">
+            <div className={`p-4 rounded-full bg-slate-800 ${ACTIVITY_CATEGORIES.find(c => c.types.includes(selectedActivity?.category || ''))?.color || 'text-white'}`}>
+              {selectedActivity && getIcon(selectedActivity.icon, "w-12 h-12")}
+            </div>
           </div>
+          
+          {selectedActivity?.id === 'gym' ? (
+              <div className="space-y-4">
+                  <div>
+                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Exercício</label>
+                      <input 
+                          list="gym-exercises" 
+                          value={gymExercise} 
+                          onChange={e => setGymExercise(e.target.value)} 
+                          className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" 
+                          placeholder="Ex: Supino Reto" 
+                      />
+                      <datalist id="gym-exercises">
+                          {uniqueExercises.map(ex => <option key={ex} value={ex} />)}
+                      </datalist>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                      <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Carga (Kg)</label>
+                          <input type="number" value={gymWeight} onChange={e => setGymWeight(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Repetições</label>
+                          <input type="number" value={gymReps} onChange={e => setGymReps(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" />
+                      </div>
+                  </div>
+                  
+                  {/* Timer UI */}
+                  <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 text-center">
+                      <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Descanso</label>
+                      <div className="flex items-center justify-center gap-4 mb-3">
+                          <button onClick={() => setGymRestTime("01:00")} className="text-xs bg-slate-700 px-2 py-1 rounded hover:bg-slate-600">1:00</button>
+                          <button onClick={() => setGymRestTime("01:30")} className="text-xs bg-slate-700 px-2 py-1 rounded hover:bg-slate-600">1:30</button>
+                          <button onClick={() => setGymRestTime("02:00")} className="text-xs bg-slate-700 px-2 py-1 rounded hover:bg-slate-600">2:00</button>
+                      </div>
+                      
+                      {isResting ? (
+                          <div className="text-4xl font-mono font-bold text-blue-400 animate-pulse">
+                              {Math.floor(timerTimeLeft / 60)}:{(timerTimeLeft % 60).toString().padStart(2, '0')}
+                          </div>
+                      ) : (
+                          <input type="time" value={gymRestTime} onChange={e => setGymRestTime(e.target.value)} className="bg-slate-950 text-white p-2 rounded text-center font-mono w-24 mx-auto block" />
+                      )}
+                      
+                      {isResting && (
+                          <button onClick={() => { setIsResting(false); setTimerTimeLeft(0); }} className="mt-3 text-xs text-red-400 flex items-center justify-center gap-1 mx-auto hover:text-red-300">
+                              {getIcon("X", "w-3 h-3")} Cancelar Timer
+                          </button>
+                      )}
+                  </div>
+
+                  <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
+                    {getIcon("CheckCircle", "w-5 h-5")} Registrar Série
+                  </button>
+              </div>
+          ) : selectedActivity?.id === 'run' ? (
+              <div className="space-y-4">
+                  <div>
+                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Distância (Km)</label>
+                      <input type="number" step="0.01" value={runDistance} onChange={e => setRunDistance(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0.00" />
+                  </div>
+                  <div>
+                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Tempo Total (MM:SS)</label>
+                      <div className="flex gap-2 items-center">
+                          <input type="text" value={runDuration} onChange={e => {
+                              // Simple mask logic for MM:SS
+                              let val = e.target.value.replace(/\D/g, '');
+                              if (val.length > 4) val = val.slice(0, 4);
+                              if (val.length > 2) val = val.slice(0, 2) + ':' + val.slice(2);
+                              setRunDuration(val);
+                          }} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none font-mono text-center" placeholder="00:00" />
+                      </div>
+                  </div>
+                  
+                  <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 flex justify-between items-center">
+                      <div className="text-center w-full">
+                          <span className="block text-xs text-slate-400 uppercase font-bold">Ritmo (Pace)</span>
+                          <span className={`text-2xl font-mono font-bold ${Number(currentPace.split(':')[0]) < 4 ? 'text-yellow-400' : Number(currentPace.split(':')[0]) < 5 ? 'text-blue-400' : 'text-white'}`}>
+                              {currentPace} <span className="text-xs text-slate-500">/km</span>
+                          </span>
+                      </div>
+                      <div className="text-center w-full border-l border-slate-600">
+                           <span className="block text-xs text-slate-400 uppercase font-bold">XP Estimado</span>
+                           <span className="text-2xl font-mono font-bold text-emerald-400">
+                               {Math.floor((Number(runDistance)||0) * 30 * (Number(currentPace.split(':')[0]) < 4 ? 1.5 : Number(currentPace.split(':')[0]) < 5 ? 1.2 : 1))}
+                           </span>
+                      </div>
+                  </div>
+
+                  <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
+                    {getIcon("CheckCircle", "w-5 h-5")} Registrar Corrida
+                  </button>
+              </div>
+          ) : selectedActivity?.id === 'shooting' || selectedActivity?.id === 'archery' || selectedActivity?.id === 'knife_throw' ? (
+              <div className="space-y-4">
+                  {/* Target Practice UI */}
+                  <div className="grid grid-cols-2 gap-4">
+                      <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                              {selectedActivity.id === 'shooting' ? 'Armamento' : selectedActivity.id === 'archery' ? 'Tipo de Arco' : 'Estilo'}
+                          </label>
+                          <select value={targetTool} onChange={e => setTargetTool(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none appearance-none">
+                              {selectedActivity.id === 'shooting' ? (
+                                  <>
+                                    <option value="curta">Arma Curta (Pistola)</option>
+                                    <option value="longa">Arma Longa (Rifle)</option>
+                                    <option value="espingarda">Espingarda</option>
+                                  </>
+                              ) : selectedActivity.id === 'archery' ? (
+                                  <>
+                                    <option value="recurvo">Recurvo</option>
+                                    <option value="composto">Composto</option>
+                                    <option value="longbow">Longbow</option>
+                                    <option value="besta">Besta</option>
+                                  </>
+                              ) : (
+                                  <>
+                                    <option value="sem_giro">Sem Giro</option>
+                                    <option value="meio_giro">Meio Giro</option>
+                                    <option value="giro_completo">Giro Completo</option>
+                                  </>
+                              )}
+                          </select>
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Distância (m)</label>
+                          <input type="number" value={targetDistance} onChange={e => setTargetDistance(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: 10" />
+                      </div>
+                  </div>
+
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
+                      <h4 className="text-xs font-bold text-slate-400 uppercase mb-3 text-center">Registro de Impactos</h4>
+                      <div className="space-y-3">
+                          {[
+                              { key: 'center', label: 'Mosca (Centro)', color: 'text-red-500', pts: 10 },
+                              { key: 'c1', label: 'Círculo 9-8', color: 'text-yellow-500', pts: 5 },
+                              { key: 'c2', label: 'Círculo 7-6', color: 'text-blue-500', pts: 3 },
+                              { key: 'c3', label: 'Círculo 5-4', color: 'text-white', pts: 2 },
+                              { key: 'outer', label: 'Borda/Silhueta', color: 'text-slate-500', pts: 1 },
+                          ].map(zone => (
+                              <div key={zone.key} className="flex items-center justify-between">
+                                  <span className={`text-sm font-bold ${zone.color}`}>{zone.label}</span>
+                                  <div className="flex items-center gap-3">
+                                      <button onClick={() => setTargetHits(prev => ({ ...prev, [zone.key]: Math.max(0, prev[zone.key as keyof typeof targetHits] - 1) }))} className="w-8 h-8 rounded bg-slate-800 text-white hover:bg-slate-700">-</button>
+                                      <span className="w-6 text-center font-mono">{targetHits[zone.key as keyof typeof targetHits]}</span>
+                                      <button onClick={() => setTargetHits(prev => ({ ...prev, [zone.key]: prev[zone.key as keyof typeof targetHits] + 1 }))} className="w-8 h-8 rounded bg-slate-800 text-white hover:bg-slate-700">+</button>
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                  </div>
+
+                  <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
+                    {getIcon("CheckCircle", "w-5 h-5")} Registrar Sessão
+                  </button>
+              </div>
+          ) : (
+              <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-2">
+                      Quantidade ({selectedActivity?.unit})
+                    </label>
+                    <input
+                      type="number"
+                      value={inputAmount}
+                      onChange={(e) => setInputAmount(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg p-4 text-white text-2xl font-bold text-center focus:ring-2 focus:ring-blue-500 outline-none"
+                      placeholder="0"
+                      autoFocus
+                    />
+                  </div>
+                  
+                  <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
+                    {getIcon("CheckCircle", "w-5 h-5")} Confirmar
+                  </button>
+              </div>
+          )}
+          </div>
+      </Modal>
+
+      {/* SLEEP MODAL */}
+      <Modal isOpen={isSleepModalOpen} onClose={() => setIsSleepModalOpen(false)} title="Registrar Sono">
+          <div className="space-y-6">
+              <div className="grid grid-cols-2 gap-4">
+                  <div>
+                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Dormiu às</label>
+                      <input type="time" value={bedTime} onChange={e => setBedTime(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white text-center focus:ring-2 focus:ring-purple-500 outline-none" />
+                  </div>
+                  <div>
+                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Acordou às</label>
+                      <input type="time" value={wakeTime} onChange={e => setWakeTime(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white text-center focus:ring-2 focus:ring-purple-500 outline-none" />
+                  </div>
+              </div>
+              
+              <div className="bg-purple-900/20 p-4 rounded-xl border border-purple-500/30">
+                  <p className="text-xs text-purple-200 text-center leading-relaxed">
+                      Dormir bem recupera sua energia e concede um <strong>Buff de XP</strong> para o dia seguinte.
+                      <br/>O ideal é entre 7h e 9h de sono.
+                  </p>
+              </div>
+
+              <button onClick={handleRegisterSleep} className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
+                  {getIcon("Moon", "w-5 h-5")} Registrar Descanso
+              </button>
+          </div>
+      </Modal>
+
+      {/* PROFILE MODAL */}
+      <Modal isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} title="Ficha do Personagem" large>
+          {isEditingProfile && user ? (
+              <form onSubmit={handleUpdateProfile} className="space-y-4">
+                  <div className="flex justify-center mb-6 relative">
+                      <div className="w-32 h-32 rounded-full overflow-hidden border-4 border-slate-600 bg-slate-800 relative group">
+                          <img src={getAvatarUrl} className="w-full h-full object-cover" />
+                          <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+                              {getIcon("Camera", "w-8 h-8 text-white")}
+                          </div>
+                      </div>
+                      <input type="file" ref={fileInputRef} onChange={handleImageUpload} className="hidden" accept="image/*" />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                      <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Peso (kg)</label>
+                          <input name="weight" type="number" step="0.1" defaultValue={user.weight} className="w-full bg-slate-950 border border-slate-700 rounded p-2" />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Altura (cm)</label>
+                          <input name="height" type="number" defaultValue={user.height} className="w-full bg-slate-950 border border-slate-700 rounded p-2" />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Gênero</label>
+                          <select name="gender" defaultValue={user.gender} className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white">
+                              <option value="Masculino">Masculino</option>
+                              <option value="Feminino">Feminino</option>
+                              <option value="Outros">Outros</option>
+                          </select>
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Profissão</label>
+                          <input name="profession" defaultValue={user.profession} className="w-full bg-slate-950 border border-slate-700 rounded p-2" />
+                      </div>
+                  </div>
+                  <div className="flex gap-2 pt-4">
+                      <button type="button" onClick={() => setIsEditingProfile(false)} className="flex-1 bg-slate-700 p-3 rounded-lg font-bold">Cancelar</button>
+                      <button type="submit" className="flex-1 bg-green-600 p-3 rounded-lg font-bold">Salvar Alterações</button>
+                  </div>
+              </form>
+          ) : user && (
+            <div className="space-y-6">
+              <div className="flex flex-col md:flex-row gap-6 items-center md:items-start">
+                  <div className="relative">
+                      <div className="w-32 h-32 rounded-full overflow-hidden border-4 border-slate-700 bg-slate-800 shadow-xl">
+                          <img src={getAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                      </div>
+                      <button onClick={() => setIsEditingProfile(true)} className="absolute bottom-0 right-0 bg-slate-700 p-2 rounded-full border border-slate-600 hover:bg-slate-600 text-white shadow-lg">
+                          {getIcon("Pencil", "w-4 h-4")}
+                      </button>
+                  </div>
+                  <div className="flex-1 text-center md:text-left space-y-1">
+                      <h2 className="text-3xl font-black text-white">{user.name}</h2>
+                      <p className="text-blue-400 font-bold uppercase tracking-widest text-sm">{gameState.classTitle} • Nível {gameState.level}</p>
+                      <div className="flex flex-wrap gap-2 justify-center md:justify-start mt-2">
+                          <span className="text-xs bg-slate-800 px-2 py-1 rounded text-slate-400 border border-slate-700">{user.profession}</span>
+                          <span className="text-xs bg-slate-800 px-2 py-1 rounded text-slate-400 border border-slate-700">{user.weight}kg</span>
+                          <span className="text-xs bg-slate-800 px-2 py-1 rounded text-slate-400 border border-slate-700">{user.height}cm</span>
+                      </div>
+                  </div>
+              </div>
+
+              <div className="bg-slate-950/50 p-6 rounded-2xl border border-slate-800 shadow-inner">
+                  <h3 className="text-xs font-bold text-slate-400 uppercase mb-4 text-center">Gráfico de Atributos</h3>
+                  <RadarChart attributes={gameState.attributes} />
+              </div>
+
+              {/* DAILY SUMMARY */}
+              <div className="bg-slate-950/50 p-4 rounded-xl border border-slate-800">
+                  <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-800">
+                       <button onClick={() => changeSummaryDate(-1)} className="p-2 hover:bg-slate-800 rounded-full">{getIcon("ChevronLeft")}</button>
+                       <div className="text-center">
+                           <h3 className="text-sm font-bold text-white flex items-center gap-2 justify-center">
+                               {getIcon("Calendar", "w-4 h-4 text-blue-400")} 
+                               {summaryDate.toLocaleDateString()}
+                           </h3>
+                           <span className="text-[10px] text-slate-500 uppercase font-bold">
+                               {summaryDate.toDateString() === new Date().toDateString() ? "Hoje" : "Histórico"}
+                           </span>
+                       </div>
+                       <button onClick={() => changeSummaryDate(1)} className={`p-2 hover:bg-slate-800 rounded-full ${summaryDate.toDateString() === new Date().toDateString() ? 'opacity-0 pointer-events-none' : ''}`}>{getIcon("ChevronRight")}</button>
+                  </div>
+
+                  {dailySummary.count === 0 ? (
+                      <div className="text-center py-6 text-slate-500 text-sm">Nenhuma atividade registrada neste dia.</div>
+                  ) : (
+                      <div className="space-y-3">
+                          <div className="flex justify-between items-center bg-blue-900/20 p-3 rounded-lg border border-blue-900/50">
+                              <span className="text-xs font-bold text-blue-300 uppercase">XP Total do Dia</span>
+                              <span className="text-lg font-black text-blue-400">+{dailySummary.totalXp} XP</span>
+                          </div>
+                          <div className="space-y-2">
+                              {dailySummary.list.map((item, idx) => (
+                                  <div key={idx} className="flex items-start gap-3 bg-slate-900 p-2 rounded border border-slate-800">
+                                      <div className="pt-1">{getIcon(item.activity.icon, "w-4 h-4 text-slate-400")}</div>
+                                      <div className="flex-1">
+                                          <div className="flex justify-between">
+                                              <span className="text-sm font-bold text-white">{item.activity.label}</span>
+                                              <span className="text-xs font-bold text-slate-500">x{item.count}</span>
+                                          </div>
+                                          {item.details.length > 0 && (
+                                              <p className="text-[10px] text-slate-400 mt-1">{item.details.slice(0, 3).join(', ')}{item.details.length > 3 ? '...' : ''}</p>
+                                          )}
+                                      </div>
+                                  </div>
+                              ))}
+                          </div>
+                      </div>
+                  )}
+              </div>
+              
+              <div className="space-y-2">
+                <h3 className="text-xs font-bold text-slate-400 uppercase mb-2">Histórico Completo</h3>
+                <div className="max-h-60 overflow-y-auto pr-2 space-y-2 custom-scrollbar">
+                    {historyGroups.map(([actId, logs]) => {
+                        const act = ACTIVITIES.find(a => a.id === actId);
+                        const isExpanded = expandedHistoryId === actId;
+                        if (!act) return null;
+
+                        return (
+                            <div key={actId} className="bg-slate-900 rounded-lg border border-slate-800 overflow-hidden">
+                                <button 
+                                    onClick={() => setExpandedHistoryId(isExpanded ? null : actId)}
+                                    className="w-full flex items-center justify-between p-3 hover:bg-slate-800 transition-colors"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="text-slate-400">{getIcon(act.icon, "w-4 h-4")}</div>
+                                        <div className="text-left">
+                                            <div className="text-sm font-bold text-white">{act.label}</div>
+                                            <div className="text-[10px] text-slate-500">Último: {new Date(logs[0].timestamp).toLocaleDateString()}</div>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-xs font-bold text-blue-500 bg-blue-900/20 px-2 py-1 rounded">{logs.length} regs</span>
+                                        {getIcon(isExpanded ? "ChevronLeft" : "ChevronRight", `w-4 h-4 text-slate-500 transition-transform ${isExpanded ? '-rotate-90' : 'rotate-90'}`)}
+                                    </div>
+                                </button>
+                                
+                                {isExpanded && (
+                                    <div className="bg-slate-950/50 p-2 space-y-2 border-t border-slate-800">
+                                        {logs.map((log, index) => {
+                                            const showDateHeader = index === 0 || getDayLabel(log.timestamp) !== getDayLabel(logs[index - 1].timestamp);
+                                            return (
+                                            <React.Fragment key={log.id}>
+                                                {showDateHeader && (
+                                                    <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest py-1 border-b border-slate-800/50 mt-2 mb-1">
+                                                        {getDayLabel(log.timestamp)}
+                                                    </div>
+                                                )}
+                                                <div className="flex items-center justify-between text-xs p-2 rounded hover:bg-slate-800/50">
+                                                    <div>
+                                                        <span className="text-slate-300 font-semibold mr-2">
+                                                            {log.details?.exercise ? log.details.exercise : 
+                                                             log.details?.distance ? `${log.details.distance}km` :
+                                                             `${log.amount} ${act.unit}`}
+                                                        </span>
+                                                        {log.details && (
+                                                            <span className="text-[10px] text-slate-500 block">
+                                                                {log.details.weight ? `${log.details.weight}kg x ${log.details.reps}` : 
+                                                                 log.details.pace ? `Pace: ${log.details.pace}` : ''}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="text-green-500 font-bold">+{log.xpGained} XP</span>
+                                                        <button onClick={() => handleDeleteLog(log.id)} className="text-slate-600 hover:text-red-500 transition-colors p-1">
+                                                            {getIcon("Trash2", "w-3 h-3")}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </React.Fragment>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+              </div>
+            </div>
+          )}
+      </Modal>
+
+      {/* QUESTS MODAL */}
+      <Modal isOpen={isQuestModalOpen} onClose={() => setIsQuestModalOpen(false)} title="Missões">
+          <div className="space-y-6">
+              {/* Daily Quests Section */}
+              <div>
+                  <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+                      {getIcon("Clock", "w-4 h-4")} Diárias
+                  </h3>
+                  
+                  {/* BASIC HABITS (TOP) */}
+                  <div className="mb-4 space-y-3">
+                      <h4 className="text-[10px] font-bold text-blue-400 uppercase tracking-widest border-b border-blue-900/30 pb-1 mb-2">Hábitos Essenciais</h4>
+                      {basicDailyQuests.map(quest => {
+                          const act = ACTIVITIES.find(a => a.id === quest.activityId);
+                          if (!act) return null;
+                          const progress = Math.min(100, (quest.currentAmount / quest.targetAmount) * 100);
+                          
+                          return (
+                              <div key={quest.id} className="bg-slate-800 p-3 rounded-lg border border-slate-700/50 relative overflow-hidden">
+                                  <div className="flex justify-between items-center mb-2 relative z-10">
+                                      <div className="flex items-center gap-2">
+                                          <div className="text-slate-400">{getIcon(act.icon, "w-4 h-4")}</div>
+                                          <div>
+                                              <div className="text-xs font-bold text-white">{act.label}</div>
+                                              <div className="text-[10px] text-slate-500">{quest.currentAmount} / {quest.targetAmount} {act.unit}</div>
+                                          </div>
+                                      </div>
+                                      {quest.isClaimed ? (
+                                          <span className="text-xs font-bold text-green-500 flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Feito</span>
+                                      ) : quest.currentAmount >= quest.targetAmount ? (
+                                          <button onClick={() => handleClaimQuest(quest.id)} className="text-xs bg-yellow-500 text-black font-bold px-3 py-1 rounded animate-pulse">
+                                              Coletar {quest.xpReward} XP
+                                          </button>
+                                      ) : (
+                                          <span className="text-xs font-bold text-slate-600">{quest.xpReward} XP</span>
+                                      )}
+                                  </div>
+                                  <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden">
+                                      <div className="bg-blue-500 h-full transition-all duration-500" style={{ width: `${progress}%` }}></div>
+                                  </div>
+                              </div>
+                          );
+                      })}
+                  </div>
+
+                  {/* TRAINING & CLASS (BOTTOM) */}
+                  <div className="space-y-3">
+                      <h4 className="text-[10px] font-bold text-red-400 uppercase tracking-widest border-b border-red-900/30 pb-1 mb-2">Treino & Classe</h4>
+                      {advancedDailyQuests.map(quest => {
+                          const act = ACTIVITIES.find(a => a.id === quest.activityId);
+                          if (!act) return null;
+                          const progress = Math.min(100, (quest.currentAmount / quest.targetAmount) * 100);
+                          
+                          return (
+                              <div key={quest.id} className="bg-slate-800 p-3 rounded-lg border border-slate-700/50 relative overflow-hidden">
+                                  <div className="flex justify-between items-center mb-2 relative z-10">
+                                      <div className="flex items-center gap-2">
+                                          <div className="text-slate-400">{getIcon(act.icon, "w-4 h-4")}</div>
+                                          <div>
+                                              <div className="text-xs font-bold text-white">{act.label}</div>
+                                              <div className="text-[10px] text-slate-500">{quest.currentAmount} / {quest.targetAmount} {act.unit}</div>
+                                          </div>
+                                      </div>
+                                      {quest.isClaimed ? (
+                                          <span className="text-xs font-bold text-green-500 flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Feito</span>
+                                      ) : quest.currentAmount >= quest.targetAmount ? (
+                                          <button onClick={() => handleClaimQuest(quest.id)} className="text-xs bg-yellow-500 text-black font-bold px-3 py-1 rounded animate-pulse">
+                                              Coletar {quest.xpReward} XP
+                                          </button>
+                                      ) : (
+                                          <span className="text-xs font-bold text-slate-600">{quest.xpReward} XP</span>
+                                      )}
+                                  </div>
+                                  <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden">
+                                      <div className="bg-blue-500 h-full transition-all duration-500" style={{ width: `${progress}%` }}></div>
+                                  </div>
+                              </div>
+                          );
+                      })}
+                  </div>
+              </div>
+              
+              {/* Weekly Quests Section */}
+              <div>
+                  <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2 mt-6">
+                      {getIcon("Calendar", "w-4 h-4")} Semanais
+                  </h3>
+                  <div className="space-y-3">
+                      {weeklyQuests.map(quest => {
+                          const act = ACTIVITIES.find(a => a.id === quest.activityId);
+                          if (!act) return null;
+                          const progress = Math.min(100, (quest.currentAmount / quest.targetAmount) * 100);
+                          return (
+                              <div key={quest.id} className="bg-slate-800 p-3 rounded-lg border border-yellow-900/30 relative overflow-hidden">
+                                  <div className="flex justify-between items-center mb-2 relative z-10">
+                                      <div className="flex items-center gap-2">
+                                          <div className="text-yellow-600">{getIcon("Star", "w-4 h-4")}</div>
+                                          <div>
+                                              <div className="text-xs font-bold text-white">{act.label}</div>
+                                              <div className="text-[10px] text-slate-500">{quest.currentAmount} / {quest.targetAmount} {act.unit}</div>
+                                          </div>
+                                      </div>
+                                      {quest.isClaimed ? (
+                                          <span className="text-xs font-bold text-green-500 flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Feito</span>
+                                      ) : quest.currentAmount >= quest.targetAmount ? (
+                                          <button onClick={() => handleClaimQuest(quest.id)} className="text-xs bg-yellow-500 text-black font-bold px-3 py-1 rounded animate-pulse">
+                                              Coletar {quest.xpReward} XP
+                                          </button>
+                                      ) : (
+                                          <span className="text-xs font-bold text-slate-600">{quest.xpReward} XP</span>
+                                      )}
+                                  </div>
+                                  <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden">
+                                      <div className="bg-yellow-600 h-full transition-all duration-500" style={{ width: `${progress}%` }}></div>
+                                  </div>
+                              </div>
+                          );
+                      })}
+                  </div>
+              </div>
+          </div>
+      </Modal>
+
+      {/* GUILD MODAL */}
+      <Modal isOpen={isGuildModalOpen} onClose={() => setIsGuildModalOpen(false)} title="Clã" large>
+          {!currentUser ? (
+              <div className="text-center py-8">
+                  <p className="text-slate-400 mb-4">Você precisa estar logado para acessar os Clãs.</p>
+                  <button onClick={() => { setIsGuildModalOpen(false); setAuthView('login'); }} className="bg-blue-600 text-white px-4 py-2 rounded-lg">Fazer Login</button>
+              </div>
+          ) : !currentGuild ? (
+              <div className="space-y-6">
+                  <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                      <h4 className="font-bold text-white mb-2">Entrar em um Clã</h4>
+                      <div className="flex gap-2">
+                          <input 
+                            value={guildInputId} 
+                            onChange={e => setGuildInputId(e.target.value)} 
+                            className="flex-1 bg-slate-950 border border-slate-700 rounded p-2 text-sm" 
+                            placeholder="ID do Clã" 
+                          />
+                          <button onClick={handleJoinGuild} className="bg-blue-600 px-4 rounded text-sm font-bold">Entrar</button>
+                      </div>
+                  </div>
+                  
+                  <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                      <h4 className="font-bold text-white mb-2">Criar Novo Clã</h4>
+                      <div className="flex gap-2">
+                          <input 
+                            value={guildCreateName} 
+                            onChange={e => setGuildCreateName(e.target.value)} 
+                            className="flex-1 bg-slate-950 border border-slate-700 rounded p-2 text-sm" 
+                            placeholder="Nome do Clã" 
+                          />
+                          <button onClick={handleCreateGuild} className="bg-green-600 px-4 rounded text-sm font-bold">Criar</button>
+                      </div>
+                  </div>
+              </div>
+          ) : (
+              <div className="h-[500px] flex flex-col">
+                  {/* Guild Tabs */}
+                  <div className="flex border-b border-slate-700 mb-4">
+                      <button onClick={() => setGuildTab('info')} className={`flex-1 pb-2 text-sm font-bold uppercase ${guildTab === 'info' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500'}`}>Geral</button>
+                      <button onClick={() => setGuildTab('chat')} className={`flex-1 pb-2 text-sm font-bold uppercase ${guildTab === 'chat' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500'}`}>Chat</button>
+                      <button onClick={() => setGuildTab('raid')} className={`flex-1 pb-2 text-sm font-bold uppercase ${guildTab === 'raid' ? 'text-red-400 border-b-2 border-red-400' : 'text-slate-500'}`}>Raid (Boss)</button>
+                  </div>
+
+                  {/* Tab Content */}
+                  <div className="flex-1 overflow-y-auto custom-scrollbar relative">
+                      {guildTab === 'info' && (
+                          <div className="space-y-4">
+                              <div className="text-center mb-6">
+                                  <h2 className="text-2xl font-black text-white">{currentGuild.name}</h2>
+                                  <p className="text-slate-400 text-xs">ID: {currentGuild.id}</p>
+                                  <div className="inline-block bg-yellow-500/10 text-yellow-500 px-3 py-1 rounded-full text-xs font-bold mt-2 border border-yellow-500/30">
+                                      Nível {currentGuild.level}
+                                  </div>
+                              </div>
+                              
+                              <div>
+                                  <h4 className="text-xs font-bold text-slate-400 uppercase mb-3">Membros ({Object.keys(currentGuild.members).length})</h4>
+                                  <div className="space-y-2">
+                                      {Object.values(currentGuild.members).map((m: GuildMember) => (
+                                          <div key={m.uid} className="flex items-center justify-between bg-slate-800 p-2 rounded">
+                                              <div className="flex items-center gap-2">
+                                                  <div className="w-8 h-8 rounded-full bg-slate-700 overflow-hidden">
+                                                      <img src={m.avatar || `https://api.dicebear.com/9.x/micah/svg?seed=${m.name}`} className="w-full h-full object-cover" />
+                                                  </div>
+                                                  <div>
+                                                      <div className="text-sm font-bold text-white">{m.name}</div>
+                                                      <div className="text-[10px] text-slate-400">{m.classTitle} • Lvl {m.level}</div>
+                                                  </div>
+                                              </div>
+                                              {m.role === 'leader' && <span className="text-xs text-yellow-500">{getIcon("Crown", "w-4 h-4")}</span>}
+                                          </div>
+                                      ))}
+                                  </div>
+                              </div>
+                          </div>
+                      )}
+
+                      {guildTab === 'chat' && (
+                          <div className="flex flex-col h-full">
+                              <div className="flex-1 space-y-3 p-2 overflow-y-auto">
+                                  {chatMessages.map(msg => (
+                                      <div key={msg.id} className={`flex flex-col ${msg.type === 'system' ? 'items-center' : msg.senderId === currentUser.uid ? 'items-end' : 'items-start'}`}>
+                                          {msg.type === 'system' ? (
+                                              <span className="bg-slate-800 text-slate-400 text-[10px] px-2 py-1 rounded-full">{msg.text}</span>
+                                          ) : (
+                                              <div className={`max-w-[80%] p-2 rounded-lg ${msg.senderId === currentUser.uid ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
+                                                  <div className="text-[10px] font-bold opacity-70 mb-1">{msg.senderName}</div>
+                                                  <div className="text-sm">{msg.text}</div>
+                                              </div>
+                                          )}
+                                      </div>
+                                  ))}
+                                  <div ref={chatEndRef} />
+                              </div>
+                              <div className="mt-2 flex gap-2 pt-2 border-t border-slate-700">
+                                  <input 
+                                    value={chatInput} 
+                                    onChange={e => setChatInput(e.target.value)} 
+                                    onKeyDown={e => e.key === 'Enter' && handleSendMessage()}
+                                    className="flex-1 bg-slate-950 border border-slate-700 rounded p-2 text-sm" 
+                                    placeholder="Mensagem..." 
+                                  />
+                                  <button onClick={handleSendMessage} className="bg-blue-600 px-3 rounded">{getIcon("MessageSquare", "w-4 h-4")}</button>
+                              </div>
+                          </div>
+                      )}
+
+                      {guildTab === 'raid' && currentGuild.boss && (
+                          <div className="text-center space-y-6 pt-4">
+                              <div className="text-6xl animate-bounce-slow">{currentGuild.boss.image}</div>
+                              <div>
+                                  <h3 className="text-xl font-black text-red-500">{currentGuild.boss.name}</h3>
+                                  <p className="text-xs text-slate-400 font-bold uppercase">Nível {currentGuild.boss.level}</p>
+                              </div>
+                              
+                              <div className="relative pt-1 px-4">
+                                  <div className="flex mb-1 items-center justify-between">
+                                      <span className="text-xs font-bold text-red-200">{currentGuild.boss.currentHp} / {currentGuild.boss.maxHp} HP</span>
+                                  </div>
+                                  <div className="overflow-hidden h-4 text-xs flex rounded bg-red-900">
+                                      <div style={{ width: `${(currentGuild.boss.currentHp / currentGuild.boss.maxHp) * 100}%` }} className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-red-500 transition-all duration-500"></div>
+                                  </div>
+                              </div>
+
+                              <div className="grid grid-cols-3 gap-2 px-4">
+                                  <button onClick={handleAttackBoss} className="bg-red-900/40 border border-red-600 hover:bg-red-800 p-2 rounded-lg flex flex-col items-center gap-1 group">
+                                      {getIcon("Swords", "w-6 h-6 text-red-400 group-hover:scale-110 transition-transform")}
+                                      <span className="text-[10px] font-bold">Atacar (Flexão)</span>
+                                  </button>
+                                  <button onClick={handleAttackBoss} className="bg-red-900/40 border border-red-600 hover:bg-red-800 p-2 rounded-lg flex flex-col items-center gap-1 group">
+                                      {getIcon("ArrowBigUp", "w-6 h-6 text-red-400 group-hover:scale-110 transition-transform")}
+                                      <span className="text-[10px] font-bold">Atacar (Abdominal)</span>
+                                  </button>
+                                  <button onClick={handleAttackBoss} className="bg-red-900/40 border border-red-600 hover:bg-red-800 p-2 rounded-lg flex flex-col items-center gap-1 group">
+                                      {getIcon("ArrowBigUp", "w-6 h-6 text-red-400 group-hover:scale-110 transition-transform")}
+                                      <span className="text-[10px] font-bold">Atacar (Agachamento)</span>
+                                  </button>
+                              </div>
+                              <p className="text-[10px] text-slate-500 px-6">
+                                  Realize exercícios reais e clique para causar dano! O dano é baseado no seu Nível.
+                              </p>
+                          </div>
+                      )}
+                  </div>
+              </div>
+          )}
       </Modal>
 
     </div>
