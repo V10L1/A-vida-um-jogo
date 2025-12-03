@@ -246,6 +246,7 @@ export default function App() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const timerIntervalRef = useRef<number | null>(null);
   const hasNarratorRunRef = useRef(false);
+  const registerFormRef = useRef<HTMLFormElement>(null);
 
   const XP_FOR_NEXT_LEVEL_BASE = 100;
 
@@ -495,6 +496,56 @@ export default function App() {
     if (check === today) return "Hoje"; if (check === yesterday) return "Ontem"; return date.toLocaleDateString();
   };
 
+  // Helper function to prepare default game state
+  const createInitialGameState = (bmiBonus: number): GameState => {
+      const { quests, lastDaily, lastWeekly } = generateNewQuests([], "NPC", 0, 0, []);
+      const initialAttributes = { STR: 0, END: 0, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0 };
+      if (bmiBonus > 0) initialAttributes.END = bmiBonus;
+      
+      return {
+        level: 1, currentXp: 0, totalXp: 0, logs: [], classTitle: "NPC",
+        attributes: initialAttributes,
+        activeBuff: null,
+        quests,
+        lastDailyQuestGen: lastDaily, 
+        lastWeeklyQuestGen: lastWeekly
+      };
+  };
+
+  // --- Login/Auth Logic ---
+  
+  // NEW: Handle Google Registration specifically to capture form data
+  const handleGoogleRegister = async () => {
+      if (!registerFormRef.current) return;
+      const formData = new FormData(registerFormRef.current);
+      const name = formData.get('name') as string;
+      const weight = Number(formData.get('weight'));
+      const height = Number(formData.get('height'));
+      
+      if (!name || !weight || !height) {
+          alert("Por favor, preencha Nome, Peso e Altura antes de conectar com Google.");
+          return;
+      }
+      
+      // Save pending data to local storage before redirect
+      const pendingData = {
+          name,
+          gender: formData.get('gender'),
+          dob: formData.get('dob'),
+          profession: formData.get('profession'),
+          weight,
+          height
+      };
+      
+      localStorage.setItem('liferpg_pending_reg', JSON.stringify(pendingData));
+      
+      try {
+          await loginWithGoogle();
+      } catch(e: any) {
+          alert("Erro Google: " + e.message);
+      }
+  };
+
   useEffect(() => {
     const savedUser = localStorage.getItem('liferpg_user');
     const savedGame = localStorage.getItem('liferpg_game');
@@ -520,14 +571,52 @@ export default function App() {
         setGameState(prev => ({ ...prev, quests, lastDailyQuestGen: lastDaily, lastWeeklyQuestGen: lastWeekly }));
     }
     
-    // CORREÇÃO LOGIN GOOGLE: Verificar retorno do redirect explicitamente
+    // CORREÇÃO LOGIN GOOGLE: Verificar retorno do redirect e criar perfil se necessário
     const checkLogin = async () => { 
         try { 
             const resultUser = await checkRedirectResult(); 
             if (resultUser) {
-                // Usuário voltou do Google, forçar estado logado
-                setCurrentUser(resultUser);
-                setIsSyncing(true); // Iniciar sync visual
+                // Check for pending registration data
+                const pendingReg = localStorage.getItem('liferpg_pending_reg');
+                
+                if (pendingReg) {
+                    // This is a new registration via Google
+                    const regData = JSON.parse(pendingReg);
+                    const newUser: UserProfile = { ...regData };
+                    const bmiBonus = calculateBmiBonus(newUser.weight, newUser.height);
+                    const newGameState = createInitialGameState(bmiBonus);
+                    
+                    setUser(newUser);
+                    setGameState(newGameState);
+                    setCurrentUser(resultUser);
+                    
+                    await saveUserDataToCloud(resultUser.uid, newUser, newGameState);
+                    localStorage.removeItem('liferpg_pending_reg');
+                    updateNarrator(newUser, newGameState, undefined, 'login');
+                } else {
+                    // Normal Login or "Ghost" user fix
+                    setCurrentUser(resultUser);
+                    
+                    // Try load, if fail, create default
+                    const cloudData = await loadUserDataFromCloud(resultUser.uid);
+                    if (!cloudData) {
+                         // GHOST USER FIX: Create default profile if none exists
+                         const defaultUser: UserProfile = {
+                             name: resultUser.displayName || "Aventureiro",
+                             dob: "2000-01-01",
+                             weight: 70,
+                             height: 170,
+                             gender: 'Outros',
+                             profession: 'Iniciante',
+                             role: 'user'
+                         };
+                         const defaultState = createInitialGameState(0);
+                         setUser(defaultUser);
+                         setGameState(defaultState);
+                         await saveUserDataToCloud(resultUser.uid, defaultUser, defaultState);
+                    }
+                }
+                setIsSyncing(true);
             }
         } catch (error: any) { alert("Erro login: " + error.message); } 
     };
@@ -558,7 +647,29 @@ export default function App() {
                 if (cloudGame.guildId) { subscribeToGuild(cloudGame.guildId, (guild, messages) => { setCurrentGuild(guild); if (messages) setChatMessages(messages); }); }
                 fetchActiveDuels(firebaseUser.uid, (activeDuels) => { setDuels(activeDuels); });
                 if (!hasNarratorRunRef.current && lostAttributes.length === 0) { hasNarratorRunRef.current = true; updateNarrator(u, newState, undefined, 'login'); }
-              } else { if (savedUser && savedGame) await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame)); }
+              } else { 
+                  // If onAuthStateChanged triggers but no cloud data (and we didn't just register),
+                  // it might be a ghost user who refreshed page.
+                  // Only create default if NOT in pending reg mode (handled by checkRedirectResult)
+                  if (!localStorage.getItem('liferpg_pending_reg') && savedUser && savedGame) {
+                      await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
+                  } else if (!localStorage.getItem('liferpg_pending_reg')) {
+                       // Create Default "Ghost" Fix
+                       const defaultUser: UserProfile = {
+                             name: firebaseUser.displayName || "Aventureiro",
+                             dob: "2000-01-01",
+                             weight: 70,
+                             height: 170,
+                             gender: 'Outros',
+                             profession: 'Iniciante',
+                             role: 'user'
+                       };
+                       const defaultState = createInitialGameState(0);
+                       setUser(defaultUser);
+                       setGameState(defaultState);
+                       await saveUserDataToCloud(firebaseUser.uid, defaultUser, defaultState);
+                  }
+              }
               setIsSyncing(false);
           }
         }
@@ -596,6 +707,7 @@ export default function App() {
       if (!isFirebaseReady) { alert("Erro Crítico: O Firebase não foi configurado. As chaves de API estão faltando."); return; }
       if (authPassword !== authConfirmPassword) { alert("As senhas não conferem!"); return; }
       if (authPassword.length < 6) { alert("A senha deve ter pelo menos 6 caracteres."); return; }
+      
       const formData = new FormData(e.currentTarget);
       const name = formData.get('name') as string;
       const gender = formData.get('gender') as Gender;
@@ -603,14 +715,13 @@ export default function App() {
       const profession = formData.get('profession') as string;
       const weight = Number(formData.get('weight'));
       const height = Number(formData.get('height'));
+      
       try {
           const firebaseUser = await registerWithEmail(authEmail, authPassword);
           const newUser: UserProfile = { name, dob, weight, height, gender, profession };
           const bmiBonus = calculateBmiBonus(weight, height);
-          const initialAttributes = { ...gameState.attributes }; if (bmiBonus > 0) initialAttributes.END = bmiBonus;
-          const newGameState: GameState = { ...gameState, attributes: initialAttributes };
-          const { quests } = generateNewQuests([], "NPC", 0, 0, []);
-          newGameState.quests = quests;
+          const newGameState = createInitialGameState(bmiBonus);
+          
           setUser(newUser); setGameState(newGameState); setCurrentUser(firebaseUser);
           await saveUserDataToCloud(firebaseUser.uid, newUser, newGameState);
           updateNarrator(newUser, newGameState, undefined, 'login');
@@ -875,14 +986,17 @@ export default function App() {
                             <button type="button" onClick={handleGoogleLogin} disabled={!isFirebaseReady} className="w-full bg-slate-800 disabled:opacity-50 text-white py-3 rounded-xl flex items-center justify-center gap-2">{getIcon("User", "w-4 h-4")} Google</button>
                         </form>
                     ) : (
-                        <form onSubmit={handleRegister} className="space-y-4">
+                        <form ref={registerFormRef} onSubmit={handleRegister} className="space-y-4">
                              <input name="name" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2" placeholder="Nome Herói" />
                              <div className="grid grid-cols-2 gap-2"><select name="gender" className="bg-slate-950 border border-slate-700 rounded-lg p-2 text-white"><option>Masculino</option><option>Feminino</option><option>Outros</option></select><input type="date" name="dob" className="bg-slate-950 border border-slate-700 rounded-lg p-2 text-white" /></div>
                              <input name="profession" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2" placeholder="Profissão" />
                              <div className="grid grid-cols-2 gap-2"><input type="number" name="weight" step="0.1" required className="bg-slate-950 border border-slate-700 rounded-lg p-2" placeholder="Peso" /><input type="number" name="height" required className="bg-slate-950 border border-slate-700 rounded-lg p-2" placeholder="Altura" /></div>
                              <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2" placeholder="Email" />
                              <div className="grid grid-cols-2 gap-2"><input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="bg-slate-950 border border-slate-700 rounded-lg p-2" placeholder="Senha" /><input type="password" value={authConfirmPassword} onChange={e => setAuthConfirmPassword(e.target.value)} required className={`bg-slate-950 border rounded-lg p-2 ${authPassword!==authConfirmPassword?'border-red-500':'border-slate-700'}`} placeholder="Confirmar" /></div>
-                             <button type="submit" disabled={!isFirebaseReady} className="w-full bg-blue-600 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold py-3 rounded-xl">Iniciar</button>
+                             <div className="grid grid-cols-2 gap-3 mt-4">
+                                <button type="submit" disabled={!isFirebaseReady} className="w-full bg-blue-600 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold py-3 rounded-xl text-sm">Iniciar (Email)</button>
+                                <button type="button" onClick={handleGoogleRegister} disabled={!isFirebaseReady} className="w-full bg-slate-800 disabled:opacity-50 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 text-sm">{getIcon("User", "w-4 h-4")} Google</button>
+                             </div>
                         </form>
                     )}
                 </div>
