@@ -39,11 +39,12 @@ const ProgressBar = ({ current, max, color = "bg-blue-500" }: { current: number;
   );
 };
 
+// Added overscroll-contain to prevent pull-to-refresh behavior on mobile within modals
 const Modal = ({ isOpen, onClose, title, children, large = false }: { isOpen: boolean; onClose: () => void; title: string; children?: React.ReactNode; large?: boolean }) => {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className={`bg-slate-900 border border-slate-700 rounded-xl w-full ${large ? 'max-w-2xl' : 'max-w-md'} shadow-2xl overflow-hidden animate-fade-in-up max-h-[90vh] overflow-y-auto`}>
+      <div className={`bg-slate-900 border border-slate-700 rounded-xl w-full ${large ? 'max-w-2xl' : 'max-w-md'} shadow-2xl overflow-hidden animate-fade-in-up max-h-[90vh] overflow-y-auto overscroll-contain`}>
         <div className="bg-slate-800 p-4 flex justify-between items-center border-b border-slate-700 sticky top-0 z-10">
           <h3 className="text-xl font-bold text-white">{title}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-white p-1">✕</button>
@@ -175,6 +176,7 @@ export default function App() {
 
   // Gym/Activity Inputs
   const [gymExercise, setGymExercise] = useState('');
+  const [showGymSuggestions, setShowGymSuggestions] = useState(false); // New state for custom autocomplete
   const [gymWeight, setGymWeight] = useState('');
   const [gymReps, setGymReps] = useState('');
   const [gymRestTime, setGymRestTime] = useState('02:00');
@@ -243,6 +245,12 @@ export default function App() {
     gameState.logs.forEach(log => { if (log.activityId === 'gym' && log.details?.exercise) exercises.add(log.details.exercise); });
     return Array.from(exercises).sort();
   }, [gameState.logs]);
+
+  // Filter exercises for autocomplete
+  const filteredExercises = useMemo(() => {
+      if (!gymExercise) return uniqueExercises;
+      return uniqueExercises.filter(ex => ex.toLowerCase().includes(gymExercise.toLowerCase()));
+  }, [uniqueExercises, gymExercise]);
 
   const historyGroups = useMemo(() => {
     const groups: Record<string, ActivityLog[]> = {};
@@ -869,18 +877,18 @@ export default function App() {
       <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40">
         <div className="max-w-2xl mx-auto p-4">
           <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 flex-1">
               <button onClick={() => setIsSideMenuOpen(true)} className="p-2 bg-slate-800 rounded-lg text-slate-300 hover:text-white border border-slate-700 hover:bg-slate-700 transition-colors">
                   {getIcon("Menu", "w-6 h-6")}
               </button>
-              <div className="flex items-center gap-3 cursor-pointer" onClick={() => setIsProfileModalOpen(true)}>
-                <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-slate-700 bg-slate-800 relative">
+              <div className="flex items-center gap-3 cursor-pointer min-w-0" onClick={() => setIsProfileModalOpen(true)}>
+                <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-slate-700 bg-slate-800 relative flex-shrink-0">
                     <img src={getAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
                     {isBuffActive && <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border border-slate-900 ${isDebuff ? 'bg-red-600 animate-pulse' : 'bg-purple-600'}`}></div>}
                 </div>
-                <div className="hidden sm:block">
-                    <h1 className="font-bold text-sm leading-tight text-white">{user.name}</h1>
-                    <span className="text-[10px] text-blue-400 font-bold uppercase tracking-wider">{gameState.classTitle}</span>
+                <div className="flex flex-col min-w-0">
+                    <h1 className="font-bold text-sm leading-tight text-white truncate">{user.name}</h1>
+                    <span className="text-[10px] text-blue-400 font-bold uppercase tracking-wider truncate">{gameState.classTitle}</span>
                 </div>
               </div>
             </div>
@@ -893,7 +901,7 @@ export default function App() {
                   (<div className="text-[10px] text-red-400 border border-red-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-red-500 rounded-full"></div></div>)
                )}
                {/* Level Display */}
-               <div className="text-right">
+               <div className="text-right flex-shrink-0">
                    <div className="text-3xl font-black text-yellow-400 drop-shadow-sm leading-none">{gameState.level}</div>
                    <div className="text-[10px] text-slate-500 uppercase tracking-widest">Nível</div>
                </div>
@@ -922,7 +930,45 @@ export default function App() {
           <div className="flex justify-center mb-4"><div className={`p-4 rounded-full bg-slate-800 ${ACTIVITY_CATEGORIES.find(c => c.types.includes(selectedActivity?.category || ''))?.color || 'text-white'}`}>{selectedActivity && getIcon(selectedActivity.icon, "w-12 h-12")}</div></div>
           {selectedActivity?.id === 'gym' ? (
               <div className="space-y-4">
-                  <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Exercício</label><input list="gym-exercises" value={gymExercise} onChange={e => setGymExercise(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" placeholder="Ex: Supino Reto" /><datalist id="gym-exercises">{uniqueExercises.map(ex => <option key={ex} value={ex} />)}</datalist></div>
+                  <div>
+                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Exercício</label>
+                      <div className="relative">
+                          <div className="flex gap-2">
+                              <input 
+                                value={gymExercise} 
+                                onChange={e => setGymExercise(e.target.value)} 
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" 
+                                placeholder="Ex: Supino Reto" 
+                              />
+                              <button 
+                                type="button" 
+                                onClick={() => setShowGymSuggestions(!showGymSuggestions)} 
+                                className="p-3 bg-slate-800 border border-slate-700 rounded-lg text-slate-400 hover:text-white"
+                              >
+                                {getIcon("Scroll", "w-5 h-5")}
+                              </button>
+                          </div>
+                          
+                          {/* Custom Collapsible Menu for Suggestions */}
+                          {showGymSuggestions && (
+                              <div className="mt-2 bg-slate-900 border border-slate-700 rounded-lg max-h-40 overflow-y-auto animate-fade-in-up shadow-xl">
+                                  {filteredExercises.length > 0 ? (
+                                      filteredExercises.map(ex => (
+                                          <button 
+                                            key={ex} 
+                                            onClick={() => { setGymExercise(ex); setShowGymSuggestions(false); }}
+                                            className="w-full text-left p-3 text-sm text-slate-300 hover:bg-slate-800 hover:text-white border-b border-slate-800 last:border-0"
+                                          >
+                                              {ex}
+                                          </button>
+                                      ))
+                                  ) : (
+                                      <div className="p-3 text-xs text-slate-500 text-center">Nenhum exercício encontrado.</div>
+                                  )}
+                              </div>
+                          )}
+                      </div>
+                  </div>
                   <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Carga (Kg)</label><input type="number" value={gymWeight} onChange={e => setGymWeight(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" /></div><div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Repetições</label><input type="number" value={gymReps} onChange={e => setGymReps(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" /></div></div>
                   <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 text-center"><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Descanso</label><div className="flex items-center justify-center gap-4 mb-3"><button onClick={() => setGymRestTime("01:00")} className="text-xs bg-slate-700 px-2 py-1 rounded">1:00</button><button onClick={() => setGymRestTime("01:30")} className="text-xs bg-slate-700 px-2 py-1 rounded">1:30</button><button onClick={() => setGymRestTime("02:00")} className="text-xs bg-slate-700 px-2 py-1 rounded">2:00</button></div>{restEndTime ? (<div className="text-4xl font-mono font-bold text-blue-400 animate-pulse">{Math.floor(timerTimeLeft / 60)}:{(timerTimeLeft % 60).toString().padStart(2, '0')}</div>) : (<input type="time" value={gymRestTime} onChange={e => setGymRestTime(e.target.value)} className="bg-slate-950 text-white p-2 rounded text-center font-mono w-24 mx-auto block" />)}{restEndTime && (<button onClick={() => { setRestEndTime(null); setTimerTimeLeft(0); }} className="mt-3 text-xs text-red-400 flex items-center justify-center gap-1 mx-auto">{getIcon("X", "w-3 h-3")} Cancelar</button>)}</div>
                   <button onClick={handleLogActivity} className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2">{getIcon("CheckCircle", "w-5 h-5")} Registrar Série</button>
