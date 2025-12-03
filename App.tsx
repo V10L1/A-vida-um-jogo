@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember, RPG_CLASSES, PublicProfile, Duel, Territory } from './types';
 import { getIcon } from './components/Icons';
 import { generateRpgFlavorText, NarratorTrigger } from './services/geminiService';
-import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail, getGlobalRanking, createDuel, fetchActiveDuels, acceptDuel, updateDuelProgress, cancelDuel, createTerritory, deleteTerritory, subscribeToTerritories, attackTerritoryTarget, banUser } from './firebase';
+import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail, getGlobalRanking, createDuel, fetchActiveDuels, acceptDuel, updateDuelProgress, cancelDuel, createTerritory, deleteTerritory, subscribeToTerritories, attackTerritoryTarget, banUser, isFirebaseReady } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 
@@ -333,11 +333,13 @@ export default function App() {
 
   // --- Subscriptions ---
   useEffect(() => {
-    // Subscribe to territories
-    const unsubTerritories = subscribeToTerritories((list) => {
-        setTerritories(list);
-    });
-    return () => unsubTerritories();
+    if (isFirebaseReady) {
+        // Subscribe to territories
+        const unsubTerritories = subscribeToTerritories((list) => {
+            setTerritories(list);
+        });
+        return () => unsubTerritories();
+    }
   }, []);
   
   // --- NEW QUEST GENERATION LOGIC ---
@@ -496,14 +498,14 @@ export default function App() {
         loadedState = newState;
         if (lostAttributes.length > 0) setNarratorText(`A inatividade cobrou seu preço. Atributos reduzidos: ${lostAttributes.join(', ')}`);
         setGameState(loadedState);
-        if (parsedGame.guildId && navigator.onLine) { subscribeToGuild(parsedGame.guildId, (guild, messages) => { setCurrentGuild(guild); if (messages) setChatMessages(messages); }); }
+        if (parsedGame.guildId && navigator.onLine && isFirebaseReady) { subscribeToGuild(parsedGame.guildId, (guild, messages) => { setCurrentGuild(guild); if (messages) setChatMessages(messages); }); }
     } else {
         const { quests, lastDaily, lastWeekly } = generateNewQuests([], "NPC", 0, 0, []);
         setGameState(prev => ({ ...prev, quests, lastDailyQuestGen: lastDaily, lastWeeklyQuestGen: lastWeekly }));
     }
     const checkLoginErrors = async () => { try { await checkRedirectResult(); } catch (error: any) { alert("Erro login: " + error.message); } };
     checkLoginErrors();
-    if (auth) {
+    if (auth && isFirebaseReady) {
       const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
         setCurrentUser(firebaseUser);
         if (firebaseUser) {
@@ -548,10 +550,18 @@ export default function App() {
     setUserList(list);
   };
 
-  const handleGoogleLogin = async () => { try { await loginWithGoogle(); } catch (e: any) { alert("Erro ao iniciar login: " + e.message); } };
-  const handleLogin = async (e: React.FormEvent) => { e.preventDefault(); try { await loginWithEmail(authEmail, authPassword); } catch (e: any) { alert("Erro Login: " + e.message); } };
+  const handleGoogleLogin = async () => { 
+      if (!isFirebaseReady) { alert("Erro Crítico: O Firebase não foi configurado. As chaves de API estão faltando."); return; }
+      try { await loginWithGoogle(); } catch (e: any) { alert("Erro ao iniciar login: " + e.message); } 
+  };
+  const handleLogin = async (e: React.FormEvent) => { 
+      e.preventDefault(); 
+      if (!isFirebaseReady) { alert("Erro Crítico: O Firebase não foi configurado. As chaves de API estão faltando."); return; }
+      try { await loginWithEmail(authEmail, authPassword); } catch (e: any) { alert("Erro Login: " + e.message); } 
+  };
   const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
+      if (!isFirebaseReady) { alert("Erro Crítico: O Firebase não foi configurado. As chaves de API estão faltando."); return; }
       if (authPassword !== authConfirmPassword) { alert("As senhas não conferem!"); return; }
       if (authPassword.length < 6) { alert("A senha deve ter pelo menos 6 caracteres."); return; }
       const formData = new FormData(e.currentTarget);
@@ -810,6 +820,16 @@ export default function App() {
         <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950">
             <div className="w-full max-w-md space-y-6">
                 <div className="text-center"><h1 className="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-500 mb-2">LifeRPG</h1></div>
+                {!isFirebaseReady && (
+                    <div className="bg-red-900/50 border border-red-500 text-red-200 p-4 rounded-xl text-xs">
+                        <strong>ERRO CRÍTICO: Firebase não configurado.</strong>
+                        <p className="mt-1">O aplicativo não consegue se conectar ao servidor.</p>
+                        <ul className="list-disc pl-4 mt-2 space-y-1">
+                            <li>Se estiver no PC (Localhost): Verifique se o arquivo <code>.env</code> existe na raiz com as chaves corretas.</li>
+                            <li>Se estiver na Vercel: Verifique as <code>Environment Variables</code> no painel de Settings.</li>
+                        </ul>
+                    </div>
+                )}
                 <div className="bg-slate-900/80 p-6 rounded-2xl shadow-xl border border-slate-800 backdrop-blur-sm">
                     <div className="flex border-b border-slate-700 mb-6">
                         <button onClick={() => setAuthView('login')} className={`flex-1 pb-2 text-sm font-bold uppercase ${authView === 'login' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500'}`}>Já tenho conta</button>
@@ -819,8 +839,8 @@ export default function App() {
                         <form onSubmit={handleLogin} className="space-y-4">
                             <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" placeholder="Email" />
                             <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" placeholder="Senha" />
-                            <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl">Entrar</button>
-                            <button type="button" onClick={handleGoogleLogin} className="w-full bg-slate-800 text-white py-3 rounded-xl flex items-center justify-center gap-2">{getIcon("User", "w-4 h-4")} Google</button>
+                            <button type="submit" disabled={!isFirebaseReady} className="w-full bg-blue-600 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold py-3 rounded-xl">Entrar</button>
+                            <button type="button" onClick={handleGoogleLogin} disabled={!isFirebaseReady} className="w-full bg-slate-800 disabled:opacity-50 text-white py-3 rounded-xl flex items-center justify-center gap-2">{getIcon("User", "w-4 h-4")} Google</button>
                         </form>
                     ) : (
                         <form onSubmit={handleRegister} className="space-y-4">
@@ -830,7 +850,7 @@ export default function App() {
                              <div className="grid grid-cols-2 gap-2"><input type="number" name="weight" step="0.1" required className="bg-slate-950 border border-slate-700 rounded-lg p-2" placeholder="Peso" /><input type="number" name="height" required className="bg-slate-950 border border-slate-700 rounded-lg p-2" placeholder="Altura" /></div>
                              <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2" placeholder="Email" />
                              <div className="grid grid-cols-2 gap-2"><input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="bg-slate-950 border border-slate-700 rounded-lg p-2" placeholder="Senha" /><input type="password" value={authConfirmPassword} onChange={e => setAuthConfirmPassword(e.target.value)} required className={`bg-slate-950 border rounded-lg p-2 ${authPassword!==authConfirmPassword?'border-red-500':'border-slate-700'}`} placeholder="Confirmar" /></div>
-                             <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl">Iniciar</button>
+                             <button type="submit" disabled={!isFirebaseReady} className="w-full bg-blue-600 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold py-3 rounded-xl">Iniciar</button>
                         </form>
                     )}
                 </div>

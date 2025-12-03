@@ -1,5 +1,3 @@
-
-
 // @ts-ignore
 import { initializeApp } from "firebase/app";
 import { 
@@ -19,7 +17,7 @@ import {
   collection, 
   addDoc, 
   updateDoc, 
-  deleteDoc, // Imported deleteDoc
+  deleteDoc, 
   onSnapshot, 
   query, 
   orderBy, 
@@ -33,7 +31,6 @@ import {
 import { GameState, UserProfile, Guild, GuildMember, ChatMessage, PublicProfile, Duel, Territory } from "./types";
 
 // Configuração do Firebase usando variáveis de ambiente com limpeza de espaços (.trim)
-// Isso previne erros comuns de copiar/colar na Vercel
 const firebaseConfig = {
   apiKey: process.env.FIREBASE_API_KEY ? process.env.FIREBASE_API_KEY.trim() : "",
   authDomain: process.env.FIREBASE_AUTH_DOMAIN ? process.env.FIREBASE_AUTH_DOMAIN.trim() : "",
@@ -43,64 +40,77 @@ const firebaseConfig = {
   appId: process.env.FIREBASE_APP_ID ? process.env.FIREBASE_APP_ID.trim() : ""
 };
 
-// Debug: Verificar se as chaves estão carregando (mas escondendo valores sensiveis)
-console.log("Firebase Config Status:", {
-    hasApiKey: !!firebaseConfig.apiKey,
-    authDomain: firebaseConfig.authDomain,
-    projectId: firebaseConfig.projectId
-});
-
 // Inicializa o Firebase apenas se as chaves existirem
 let app;
 let auth: any;
 let db: any;
 let googleProvider: any;
+export let isFirebaseReady = false; // Flag para UI saber se pode tentar logar
 
 try {
-  if (firebaseConfig.apiKey) {
+  if (firebaseConfig.apiKey && firebaseConfig.apiKey.length > 10) {
     app = initializeApp(firebaseConfig);
     auth = getAuth(app);
     db = getFirestore(app);
     googleProvider = new GoogleAuthProvider();
+    isFirebaseReady = true;
+    console.log("Firebase inicializado com sucesso.");
   } else {
-    console.warn("Chaves do Firebase não encontradas. Verifique o arquivo .env ou as variáveis da Vercel.");
+    console.warn("Chaves do Firebase ausentes ou inválidas.");
+    isFirebaseReady = false;
   }
 } catch (error) {
   console.error("Erro crítico ao inicializar Firebase:", error);
+  isFirebaseReady = false;
 }
 
 // Funções de Autenticação
 
 // --- Google Auth ---
 export const loginWithGoogle = async () => {
-  if (!auth) throw new Error("Firebase não configurado (Falta API Key). Verifique as variáveis de ambiente.");
+  if (!isFirebaseReady || !auth) throw new Error("Firebase não conectado. Verifique API Key.");
   try {
     await signInWithRedirect(auth, googleProvider);
-  } catch (error) {
+  } catch (error: any) {
     console.error("Erro ao iniciar login Google:", error);
+    if (error.code === 'auth/unauthorized-domain') {
+        throw new Error("Domínio não autorizado no Firebase. Adicione este site em Authentication > Settings > Authorized Domains.");
+    }
     throw error;
   }
 };
 
 // --- Email/Password Auth ---
 export const registerWithEmail = async (email: string, pass: string) => {
-  if (!auth) throw new Error("Firebase não configurado.");
+  if (!isFirebaseReady || !auth) throw new Error("Firebase não conectado.");
   try {
     const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
     return userCredential.user;
   } catch (error: any) {
     console.error("Erro ao registrar:", error);
+    if (error.code === 'auth/operation-not-allowed') {
+        throw new Error("Login por E-mail/Senha não ativado. Vá no Firebase Console > Authentication > Sign-in method e ative 'Email/Password'.");
+    } else if (error.code === 'auth/email-already-in-use') {
+        throw new Error("Este e-mail já está cadastrado.");
+    } else if (error.code === 'auth/weak-password') {
+        throw new Error("A senha é muito fraca (mínimo 6 caracteres).");
+    }
     throw error;
   }
 };
 
 export const loginWithEmail = async (email: string, pass: string) => {
-  if (!auth) throw new Error("Firebase não configurado.");
+  if (!isFirebaseReady || !auth) throw new Error("Firebase não conectado.");
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email, pass);
     return userCredential.user;
   } catch (error: any) {
     console.error("Erro ao logar com email:", error);
+    if (error.code === 'auth/invalid-credential' || error.code === 'auth/wrong-password') {
+        throw new Error("E-mail ou senha incorretos.");
+    } else if (error.code === 'auth/user-not-found') {
+        throw new Error("Usuário não encontrado.");
+    }
     throw error;
   }
 };
@@ -130,7 +140,6 @@ export const saveUserDataToCloud = async (userId: string, user: UserProfile, gam
       gameState: gameState,
       lastUpdated: Date.now()
     });
-    console.log("Dados salvos na nuvem!");
     return true;
   } catch (error) {
     console.error("Erro ao salvar na nuvem:", error);
@@ -474,7 +483,6 @@ export const updateDuelProgress = async (userId: string, activityId: string, amo
 
 // --- TERRITORY & ADMIN FUNCTIONS ---
 
-// Cria território (Admin Only)
 export const createTerritory = async (name: string, lat: number, lng: number, radius: number, enemyName: string, enemyHp: number) => {
     if (!db) return;
     try {
@@ -493,7 +501,6 @@ export const createTerritory = async (name: string, lat: number, lng: number, ra
     } catch (e) { console.error("Error creating territory", e); }
 };
 
-// Deleta território (Admin Only)
 export const deleteTerritory = async (id: string) => {
     if (!db) return;
     try {
@@ -501,7 +508,6 @@ export const deleteTerritory = async (id: string) => {
     } catch (e) { console.error("Error deleting territory", e); }
 };
 
-// Lista territórios em tempo real
 export const subscribeToTerritories = (callback: (list: Territory[]) => void) => {
     if (!db) return () => {};
     const q = query(collection(db, "territories"));
@@ -511,53 +517,33 @@ export const subscribeToTerritories = (callback: (list: Territory[]) => void) =>
     });
 };
 
-// Atacar inimigo do território (Similar ao Boss de Guilda, mas com lógica de dono)
 export const attackTerritoryTarget = async (territoryId: string, damage: number, userId: string, userName: string) => {
     if (!db) return;
     const tRef = doc(db, "territories", territoryId);
-    
-    // Sub-coleção para contar kills do usuário neste território
     const rankingRef = doc(collection(db, "territories", territoryId, "rankings"), userId);
-
     try {
         await runTransaction(db, async (transaction) => {
             const tDoc = await transaction.get(tRef);
             if (!tDoc.exists()) throw "Territory not found";
             const territory = tDoc.data() as Territory;
-
             let newHp = territory.activeEnemy.currentHp - damage;
             let enemyDefeated = false;
             const newEnemy = { ...territory.activeEnemy };
-
             if (newHp <= 0) {
                 enemyDefeated = true;
-                // Respawn Logic
                 newEnemy.level += 1;
                 newEnemy.maxHp = Math.floor(newEnemy.maxHp * 1.2);
                 newEnemy.currentHp = newEnemy.maxHp;
             } else {
                 newEnemy.currentHp = newHp;
             }
-            
             transaction.update(tRef, { activeEnemy: newEnemy });
-
             if (enemyDefeated) {
-                // Incrementa Kill Count do Usuário
                 transaction.set(rankingRef, { kills: increment(1), name: userName }, { merge: true });
-                
-                // Verifica se virou o novo dono (Simplificado: Lemos o ranking atual do user e comparamos com o atual dono)
-                // Nota: Transações não podem ler após escrita. Precisariamos de logica mais complexa, 
-                // mas para MVP vamos assumir que o frontend ou uma cloud function faria isso melhor.
-                // Aqui vamos fazer uma "leitura otimista"
                 const userRankDoc = await transaction.get(rankingRef);
-                const currentKills = (userRankDoc.data()?.kills || 0) + 1; // +1 pq acabamos de matar
-                
+                const currentKills = (userRankDoc.data()?.kills || 0) + 1;
                 if (currentKills > territory.ownerKillCount) {
-                    transaction.update(tRef, {
-                        ownerId: userId,
-                        ownerName: userName,
-                        ownerKillCount: currentKills
-                    });
+                    transaction.update(tRef, { ownerId: userId, ownerName: userName, ownerKillCount: currentKills });
                 }
             }
         });
@@ -568,7 +554,6 @@ export const attackTerritoryTarget = async (territoryId: string, damage: number,
     }
 };
 
-// Admin: Banir Usuário (Excluir doc)
 export const banUser = async (uid: string) => {
     if (!db) return;
     if (!window.confirm("Tem certeza que deseja banir/excluir este usuário permanentemente?")) return;
