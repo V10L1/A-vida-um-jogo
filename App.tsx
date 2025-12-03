@@ -4,7 +4,7 @@ import { getIcon } from './components/Icons';
 import { generateRpgFlavorText, NarratorTrigger } from './services/geminiService';
 import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail, getGlobalRanking, createDuel, fetchActiveDuels, acceptDuel, updateDuelProgress, cancelDuel, createTerritory, deleteTerritory, subscribeToTerritories, attackTerritoryTarget, banUser, isFirebaseReady } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMap, useMapEvents } from 'react-leaflet';
 
 // --- Helper Functions ---
 function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -147,6 +147,15 @@ const RecenterMap = ({ lat, lng }: { lat: number, lng: number }) => {
     return null;
 }
 
+const LocationSelector = ({ onSelect }: { onSelect: (lat: number, lng: number) => void }) => {
+    useMapEvents({
+        click(e) {
+            onSelect(e.latlng.lat, e.latlng.lng);
+        },
+    });
+    return null;
+}
+
 // --- Main App ---
 
 export default function App() {
@@ -228,6 +237,7 @@ export default function App() {
   const [userList, setUserList] = useState<PublicProfile[]>([]); // For Admin
 
   // Admin Create Territory Inputs
+  const [adminSelectedLocation, setAdminSelectedLocation] = useState<{lat: number, lng: number} | null>(null);
   const [newTerritoryName, setNewTerritoryName] = useState('');
   const [newTerritoryRadius, setNewTerritoryRadius] = useState(100);
   const [newEnemyName, setNewEnemyName] = useState('Inimigo Local');
@@ -560,6 +570,10 @@ export default function App() {
     setIsAdminModalOpen(true);
     const list = await getGlobalRanking(); // Reuse this to get all users roughly
     setUserList(list);
+    // Initialize admin location with user location if available
+    if (userLocation) {
+        setAdminSelectedLocation(userLocation);
+    }
   };
 
   const handleGoogleLogin = async () => { 
@@ -683,7 +697,7 @@ export default function App() {
         const expireDate = now + (buffDurationHours * 60 * 60 * 1000);
         setGameState(prev => ({ ...prev, activeBuff: { multiplier: buffMultiplier, expiresAt: expireDate, description: `${debuffName}: ${Math.round((buffMultiplier - 1) * 100)}% XP` } }));
         amount = Number(inputAmount) || 1; xpGained = 0;
-        const newLog: ActivityLog = { id: Date.now().toString(), activityId: selectedActivity.id, amount, xpGained, timestamp: Date.now() };
+        const newLog: ActivityLog = { id: Date.now().toString(), activityId: selectedActivity.id, amount, xpGained, timestamp: Date.now(), details: details };
         setGameState(prev => ({ ...prev, logs: [newLog, ...prev.logs].slice(0, 50) }));
         setIsActivityModalOpen(false); setNarratorText(`Hábito nocivo registrado.`); return;
     }
@@ -799,9 +813,14 @@ export default function App() {
 
   // --- Map & Territory Functions ---
   const handleCreateTerritory = async () => {
-      if (!userLocation) return;
-      await createTerritory(newTerritoryName, userLocation.lat, userLocation.lng, newTerritoryRadius, newEnemyName, newEnemyHp);
-      setNewTerritoryName(''); setIsAdminModalOpen(false); alert("Território criado!");
+      // Use selected location if available, otherwise user GPS, otherwise fail
+      const loc = adminSelectedLocation || userLocation;
+      if (!loc) {
+          alert("Nenhuma localização selecionada ou GPS indisponível.");
+          return;
+      }
+      await createTerritory(newTerritoryName, loc.lat, loc.lng, newTerritoryRadius, newEnemyName, newEnemyHp);
+      setNewTerritoryName(''); setIsAdminModalOpen(false); setAdminSelectedLocation(null); alert("Território criado!");
   };
   const handleAttackTerritory = async () => {
       if (!selectedTerritory || !currentUser || !user) return;
@@ -1242,17 +1261,38 @@ export default function App() {
            <div className="space-y-6">
                <div className="bg-slate-800 p-4 rounded-xl">
                    <h3 className="font-bold text-white mb-4 border-b border-slate-700 pb-2">Criar Território</h3>
+                   
+                   {/* Map Selector for Admin */}
+                   <div className="h-[250px] w-full rounded-lg overflow-hidden relative mb-4 border border-slate-700">
+                       {userLocation ? (
+                           <MapContainer center={[userLocation.lat, userLocation.lng]} zoom={13} style={{ height: '100%', width: '100%' }}>
+                               <TileLayer
+                                  attribution='&copy; OpenStreetMap'
+                                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                               />
+                               <LocationSelector onSelect={(lat, lng) => setAdminSelectedLocation({lat, lng})} />
+                               {userLocation && <Marker position={[userLocation.lat, userLocation.lng]}><Popup>Eu</Popup></Marker>}
+                               {adminSelectedLocation && <Marker position={[adminSelectedLocation.lat, adminSelectedLocation.lng]}><Popup>Novo Local</Popup></Marker>}
+                               {adminSelectedLocation && <Circle center={[adminSelectedLocation.lat, adminSelectedLocation.lng]} radius={newTerritoryRadius} pathOptions={{ color: 'yellow', fillColor: 'yellow', fillOpacity: 0.2 }} />}
+                           </MapContainer>
+                       ) : (
+                           <div className="flex items-center justify-center h-full text-slate-500 text-xs">Aguardando GPS para iniciar mapa...</div>
+                       )}
+                   </div>
+
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                        <input value={newTerritoryName} onChange={e => setNewTerritoryName(e.target.value)} placeholder="Nome do Local" className="bg-slate-950 border border-slate-700 rounded p-2 text-white" />
                        <input type="number" value={newTerritoryRadius} onChange={e => setNewTerritoryRadius(Number(e.target.value))} placeholder="Raio (metros)" className="bg-slate-950 border border-slate-700 rounded p-2 text-white" />
                        <input value={newEnemyName} onChange={e => setNewEnemyName(e.target.value)} placeholder="Nome do Inimigo" className="bg-slate-950 border border-slate-700 rounded p-2 text-white" />
                        <input type="number" value={newEnemyHp} onChange={e => setNewEnemyHp(Number(e.target.value))} placeholder="HP Inimigo" className="bg-slate-950 border border-slate-700 rounded p-2 text-white" />
                    </div>
+                   
                    <div className="flex justify-between items-center mb-4 text-xs text-slate-400 bg-slate-900 p-2 rounded">
-                       <span>Localização Atual:</span>
-                       <span>{userLocation ? `${userLocation.lat.toFixed(5)}, ${userLocation.lng.toFixed(5)}` : "Desconhecida"}</span>
+                       <span>Alvo: {adminSelectedLocation ? "Selecionado no Mapa" : "Meu GPS"}</span>
+                       <span>{adminSelectedLocation ? `${adminSelectedLocation.lat.toFixed(4)}, ${adminSelectedLocation.lng.toFixed(4)}` : (userLocation ? `${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}` : "...")}</span>
                    </div>
-                   <button onClick={handleCreateTerritory} disabled={!userLocation} className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-2 rounded-lg">CRIAR AQUI</button>
+                   
+                   <button onClick={handleCreateTerritory} disabled={!userLocation && !adminSelectedLocation} className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-2 rounded-lg">CRIAR TERRITÓRIO</button>
                </div>
                
                <div className="bg-slate-800 p-4 rounded-xl">
