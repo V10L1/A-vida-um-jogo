@@ -334,7 +334,13 @@ export default function App() {
       if ('geolocation' in navigator) {
           const watchId = navigator.geolocation.watchPosition(
               (pos) => { setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }); },
-              (err) => console.error("Error getting location", err),
+              (err) => {
+                  let errorMsg = "Erro desconhecido de GPS";
+                  if (err.code === 1) errorMsg = "Permissão de GPS negada";
+                  else if (err.code === 2) errorMsg = "GPS indisponível";
+                  else if (err.code === 3) errorMsg = "Tempo limite do GPS esgotou";
+                  console.warn(`Geolocalização: ${errorMsg}`);
+              },
               { enableHighAccuracy: true, timeout: 20000, maximumAge: 1000 }
           );
           return () => navigator.geolocation.clearWatch(watchId);
@@ -1209,8 +1215,8 @@ export default function App() {
                {userLocation ? (
                    <MapContainer center={[userLocation.lat, userLocation.lng]} zoom={15} style={{ height: '100%', width: '100%' }}>
                        <TileLayer
-                          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
                        />
                        <RecenterMap lat={userLocation.lat} lng={userLocation.lng} />
                        <Marker position={[userLocation.lat, userLocation.lng]}>
@@ -1267,8 +1273,8 @@ export default function App() {
                        {userLocation ? (
                            <MapContainer center={[userLocation.lat, userLocation.lng]} zoom={13} style={{ height: '100%', width: '100%' }}>
                                <TileLayer
-                                  attribution='&copy; OpenStreetMap'
-                                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                                  url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
                                />
                                <LocationSelector onSelect={(lat, lng) => setAdminSelectedLocation({lat, lng})} />
                                {userLocation && <Marker position={[userLocation.lat, userLocation.lng]}><Popup>Eu</Popup></Marker>}
