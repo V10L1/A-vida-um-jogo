@@ -706,7 +706,7 @@ export default function App() {
       e.preventDefault();
       if (!isFirebaseReady) { alert("Erro Crítico: O Firebase não foi configurado. As chaves de API estão faltando."); return; }
       if (authPassword !== authConfirmPassword) { alert("As senhas não conferem!"); return; }
-      if (authPassword.length < 6) { alert("A senha deve ter pelo menos 6 caracteres."); return; }
+      if (authPassword.length < 6) { alert("A senha é muito fraca (mínimo 6 caracteres)."); return; }
       
       const formData = new FormData(e.currentTarget);
       const name = formData.get('name') as string;
@@ -760,8 +760,13 @@ export default function App() {
               if (isSecondaryRelevant && secondMaxAttr === 'AGI') return "Corredor";
               return "Corredor";
           case 'END':
-               if (isSecondaryRelevant && secondMaxAttr === 'STR') { if (bmi >= 28) return "Tanque"; return "Crossfitter"; }
-               return "Atleta de Resistência";
+               if (isSecondaryRelevant && secondMaxAttr === 'STR') {
+                   if (bmi >= 28) return "Tanque";
+                   // Removed Crossfitter -> Guerreiro
+                   return "Guerreiro";
+               }
+               // Removed Atleta de Resistência -> Guerreiro
+               return "Guerreiro";
           case 'AGI':
               if (isSecondaryRelevant && secondMaxAttr === 'DEX') return "Espadachim";
               return "Velocista";
