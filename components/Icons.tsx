@@ -1,5 +1,3 @@
-
-
 import React from 'react';
 import { 
   Footprints, 
@@ -58,7 +56,8 @@ import {
   MapPin,
   Settings,
   ShieldAlert,
-  Ban
+  Ban,
+  Menu // New
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -81,6 +80,7 @@ export const getIcon = (name: string, className?: string) => {
     case 'Clock': return <Clock {...props} />;
     case 'ArrowBigUp': return <ArrowBigUp {...props} />;
     case 'Globe': return <Globe {...props} />; // New
+    case 'Menu': return <Menu {...props} />; // New
     
     // Map & Admin
     case 'Map': return <Map {...props} />;

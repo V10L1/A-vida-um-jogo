@@ -165,6 +165,7 @@ export default function App() {
   const [isChallengeModalOpen, setIsChallengeModalOpen] = useState(false);
   const [isMapModalOpen, setIsMapModalOpen] = useState(false);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  const [isSideMenuOpen, setIsSideMenuOpen] = useState(false);
   
   // Profile Summary State
   const [summaryDate, setSummaryDate] = useState(new Date());
@@ -570,6 +571,7 @@ export default function App() {
     setUser(null); setCurrentUser(null);
     setGameState({ level: 1, currentXp: 0, totalXp: 0, logs: [], classTitle: "NPC", attributes: { STR: 0, END: 0, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0 }, activeBuff: null, quests: [], guildId: undefined });
     setCurrentGuild(null); setChatMessages([]); setAuthView('login'); setNarratorText("Até a próxima jornada.");
+    setIsSideMenuOpen(false);
   };
 
   const calculateXpForNextLevel = (level: number) => { return level * XP_FOR_NEXT_LEVEL_BASE; };
@@ -831,34 +833,70 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-white pb-24 md:pb-6 relative overflow-hidden">
-      <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40 cursor-pointer" onClick={() => setIsProfileModalOpen(true)}>
+      {/* Side Menu Drawer */}
+      {isSideMenuOpen && (
+        <div className="relative z-50">
+            {/* Backdrop */}
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setIsSideMenuOpen(false)}></div>
+            {/* Sidebar */}
+            <div className="fixed top-0 left-0 h-full w-64 bg-slate-900 border-r border-slate-800 shadow-2xl p-6 flex flex-col animate-fade-in-right">
+                <div className="flex justify-between items-center mb-8 border-b border-slate-800 pb-4">
+                    <h2 className="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-500">MENU</h2>
+                    <button onClick={() => setIsSideMenuOpen(false)} className="text-slate-400 hover:text-white">{getIcon("X")}</button>
+                </div>
+                <div className="space-y-4 flex-1 overflow-y-auto">
+                   <button onClick={() => { setIsSideMenuOpen(false); setIsMapModalOpen(true); }} className="w-full bg-emerald-900/40 hover:bg-emerald-900/60 text-emerald-400 border border-emerald-700/50 p-3 rounded-lg flex items-center gap-3 font-bold transition-colors">{getIcon("Map", "w-5 h-5")} <span>MAPA</span></button>
+                   <button onClick={() => { setIsSideMenuOpen(false); setIsRankModalOpen(true); }} className="w-full bg-yellow-900/40 hover:bg-yellow-900/60 text-yellow-400 border border-yellow-700/50 p-3 rounded-lg flex items-center gap-3 font-bold transition-colors">{getIcon("Globe", "w-5 h-5")} <span>RANK GLOBAL</span></button>
+                   <button onClick={() => { setIsSideMenuOpen(false); setIsGuildModalOpen(true); }} className="w-full bg-indigo-900/40 hover:bg-indigo-900/60 text-indigo-400 border border-indigo-700/50 p-3 rounded-lg flex items-center gap-3 font-bold transition-colors">{getIcon("Shield", "w-5 h-5")} <span>CLÃ</span></button>
+                   <button onClick={() => { setIsSideMenuOpen(false); setIsQuestModalOpen(true); }} className="w-full bg-amber-900/40 hover:bg-amber-900/60 text-amber-400 border border-amber-700/50 p-3 rounded-lg flex items-center gap-3 font-bold transition-colors relative">
+                       {getIcon("Scroll", "w-5 h-5")} 
+                       <span>QUESTS</span>
+                       {unclaimedQuestsCount > 0 && <span className="absolute right-3 w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>}
+                   </button>
+                   {user.role === 'admin' && (
+                       <button onClick={() => { setIsSideMenuOpen(false); handleOpenAdmin(); }} className="w-full bg-red-900/40 hover:bg-red-900/60 text-red-400 border border-red-700/50 p-3 rounded-lg flex items-center gap-3 font-bold transition-colors">{getIcon("ShieldAlert", "w-5 h-5")} <span>ADMIN</span></button>
+                   )}
+                </div>
+                <div className="mt-auto pt-4 border-t border-slate-800">
+                    {currentUser && (
+                         <button onClick={handleLogout} className="w-full bg-slate-800 hover:bg-red-900/80 text-slate-300 hover:text-white border border-slate-600 p-3 rounded-lg flex items-center justify-center gap-2 font-bold transition-colors">{getIcon("Ban", "w-5 h-5")} SAIR</button>
+                    )}
+                </div>
+            </div>
+        </div>
+      )}
+
+      <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40">
         <div className="max-w-2xl mx-auto p-4">
           <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-slate-700 bg-slate-800 relative">
-                  <img src={getAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                  {isBuffActive && <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border border-slate-900 ${isDebuff ? 'bg-red-600 animate-pulse' : 'bg-purple-600'}`}></div>}
-              </div>
-              <div>
-                <h1 className="font-bold text-lg leading-tight flex items-center gap-2">{user.name}</h1>
-                <div className="flex items-center gap-2"><span className="text-xs text-blue-400 font-bold tracking-wider uppercase border border-blue-500/30 px-1.5 py-0.5 rounded bg-blue-500/10">{gameState.classTitle}</span></div>
+            <div className="flex items-center gap-4">
+              <button onClick={() => setIsSideMenuOpen(true)} className="p-2 bg-slate-800 rounded-lg text-slate-300 hover:text-white border border-slate-700 hover:bg-slate-700 transition-colors">
+                  {getIcon("Menu", "w-6 h-6")}
+              </button>
+              <div className="flex items-center gap-3 cursor-pointer" onClick={() => setIsProfileModalOpen(true)}>
+                <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-slate-700 bg-slate-800 relative">
+                    <img src={getAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                    {isBuffActive && <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border border-slate-900 ${isDebuff ? 'bg-red-600 animate-pulse' : 'bg-purple-600'}`}></div>}
+                </div>
+                <div className="hidden sm:block">
+                    <h1 className="font-bold text-sm leading-tight text-white">{user.name}</h1>
+                    <span className="text-[10px] text-blue-400 font-bold uppercase tracking-wider">{gameState.classTitle}</span>
+                </div>
               </div>
             </div>
-            <div className="flex flex-col items-end gap-1">
-               <div className="flex gap-2 flex-wrap justify-end">
-                   {user.role === 'admin' && (<button onClick={(e) => { e.stopPropagation(); handleOpenAdmin(); }} className="text-[10px] bg-red-900/40 text-red-400 border border-red-700/50 px-2 py-1 rounded flex items-center gap-1">{getIcon("ShieldAlert", "w-3 h-3")} ADMIN</button>)}
-                   <button onClick={(e) => { e.stopPropagation(); setIsMapModalOpen(true); }} className="text-[10px] bg-emerald-900/40 text-emerald-400 border border-emerald-700/50 px-2 py-1 rounded flex items-center gap-1">{getIcon("Map", "w-3 h-3")} MAPA</button>
-                   <button onClick={(e) => { e.stopPropagation(); setIsRankModalOpen(true); }} className="text-[10px] bg-yellow-900/40 text-yellow-400 border border-yellow-700/50 px-2 py-1 rounded flex items-center gap-1">Rank</button>
-                   <button onClick={(e) => { e.stopPropagation(); setIsGuildModalOpen(true); }} className="text-[10px] bg-indigo-900/40 text-indigo-400 border border-indigo-700/50 px-2 py-1 rounded flex items-center gap-1">Clã</button>
-                   <button onClick={(e) => { e.stopPropagation(); setIsQuestModalOpen(true); }} className="text-[10px] bg-amber-900/40 text-amber-400 border border-amber-700/50 px-2 py-1 rounded flex items-center gap-1">Quests {unclaimedQuestsCount > 0 && <span className="w-2 h-2 bg-red-500 rounded-full ml-1 animate-pulse"></span>}</button>
-                   {currentUser && (
-                      <>
-                        {isSyncing ? (<div className="text-[10px] text-blue-400 border border-blue-800 px-2 py-1 rounded"><div className="w-2 h-2 bg-blue-500 rounded-full animate-spin"></div></div>) : isOnline ? (<div className="text-[10px] text-emerald-400 border border-emerald-800 px-2 py-1 rounded"><div className="w-2 h-2 bg-emerald-500 rounded-full"></div></div>) : (<div className="text-[10px] text-red-400 border border-red-800 px-2 py-1 rounded"><div className="w-2 h-2 bg-red-500 rounded-full"></div></div>)}
-                        <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-slate-800 text-slate-300 border border-slate-600 px-2 py-1 rounded flex items-center gap-1 hover:bg-red-900/50 hover:text-red-200">{getIcon("X", "w-3 h-3")} Sair</button>
-                      </>
-                   )}
+            
+            <div className="flex items-center gap-3">
+               {/* Sync Status */}
+               {currentUser && (
+                  isSyncing ? (<div className="text-[10px] text-blue-400 border border-blue-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-blue-500 rounded-full animate-spin"></div></div>) : 
+                  isOnline ? (<div className="text-[10px] text-emerald-400 border border-emerald-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-emerald-500 rounded-full"></div></div>) : 
+                  (<div className="text-[10px] text-red-400 border border-red-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-red-500 rounded-full"></div></div>)
+               )}
+               {/* Level Display */}
+               <div className="text-right">
+                   <div className="text-3xl font-black text-yellow-400 drop-shadow-sm leading-none">{gameState.level}</div>
+                   <div className="text-[10px] text-slate-500 uppercase tracking-widest">Nível</div>
                </div>
-               <div className="text-right"><div className="text-3xl font-black text-yellow-400 drop-shadow-sm leading-none">{gameState.level}</div><div className="text-[10px] text-slate-500 uppercase tracking-widest">Nível</div></div>
             </div>
           </div>
           <div className="relative pt-1">
