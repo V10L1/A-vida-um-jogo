@@ -503,8 +503,20 @@ export default function App() {
         const { quests, lastDaily, lastWeekly } = generateNewQuests([], "NPC", 0, 0, []);
         setGameState(prev => ({ ...prev, quests, lastDailyQuestGen: lastDaily, lastWeeklyQuestGen: lastWeekly }));
     }
-    const checkLoginErrors = async () => { try { await checkRedirectResult(); } catch (error: any) { alert("Erro login: " + error.message); } };
-    checkLoginErrors();
+    
+    // CORREÇÃO LOGIN GOOGLE: Verificar retorno do redirect explicitamente
+    const checkLogin = async () => { 
+        try { 
+            const resultUser = await checkRedirectResult(); 
+            if (resultUser) {
+                // Usuário voltou do Google, forçar estado logado
+                setCurrentUser(resultUser);
+                setIsSyncing(true); // Iniciar sync visual
+            }
+        } catch (error: any) { alert("Erro login: " + error.message); } 
+    };
+    checkLogin();
+
     if (auth && isFirebaseReady) {
       const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
         setCurrentUser(firebaseUser);
@@ -793,13 +805,8 @@ export default function App() {
   };
   const handleAttackTerritory = async () => {
       if (!selectedTerritory || !currentUser || !user) return;
-      // Calcula XP/Dano. Para MVP, usamos um valor fixo ou baseado no level.
       const damage = 20 + (gameState.level * 2); 
       await attackTerritoryTarget(selectedTerritory.id, damage, currentUser.uid, user.name);
-      // Simulate XP gain from combat
-      const xp = 50; 
-      const newXp = gameState.currentXp + xp;
-      // ... XP logic simplified for brevity ...
       alert(`Você atacou o ${selectedTerritory.activeEnemy.name}! Causou ${damage} de dano.`);
   };
 
@@ -886,6 +893,7 @@ export default function App() {
                    )}
                 </div>
                 <div className="mt-auto pt-4 border-t border-slate-800">
+                    {/* Logout in side menu as backup */}
                     {currentUser && (
                          <button onClick={handleLogout} className="w-full bg-slate-800 hover:bg-red-900/80 text-slate-300 hover:text-white border border-slate-600 p-3 rounded-lg flex items-center justify-center gap-2 font-bold transition-colors">{getIcon("Ban", "w-5 h-5")} SAIR</button>
                     )}
@@ -914,21 +922,22 @@ export default function App() {
             </div>
             
             <div className="flex items-center gap-3">
-               {/* Sync Status */}
+               {/* Sync Status - Icons replaced dots */}
                {currentUser && (
-                  isSyncing ? (<div className="text-[10px] text-blue-400 border border-blue-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-blue-500 rounded-full animate-spin"></div></div>) : 
-                  isOnline ? (<div className="text-[10px] text-emerald-400 border border-emerald-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-emerald-500 rounded-full"></div></div>) : 
-                  (<div className="text-[10px] text-red-400 border border-red-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-red-500 rounded-full"></div></div>)
+                  isSyncing ? (<div className="p-2 text-blue-400 animate-spin" title="Sincronizando">{getIcon("RefreshCw", "w-5 h-5")}</div>) : 
+                  isOnline ? (<div className="p-2 text-emerald-400" title="Online & Salvo">{getIcon("Cloud", "w-5 h-5")}</div>) : 
+                  (<div className="p-2 text-red-400" title="Offline">{getIcon("CloudOff", "w-5 h-5")}</div>)
                )}
-               {/* Level Display */}
-               <div className="text-right flex-shrink-0">
-                   <div className="text-3xl font-black text-yellow-400 drop-shadow-sm leading-none">{gameState.level}</div>
-                   <div className="text-[10px] text-slate-500 uppercase tracking-widest">Nível</div>
-               </div>
+               {/* Logout Button (Added to Header) */}
+               {currentUser && (
+                    <button onClick={handleLogout} className="p-2 bg-slate-800 rounded-lg text-red-400 border border-slate-700 hover:bg-red-900/20" title="Sair">
+                        {getIcon("LogOut", "w-5 h-5")}
+                    </button>
+               )}
             </div>
           </div>
           <div className="relative pt-1">
-             <div className="flex mb-2 items-center justify-between"><span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-blue-100 bg-slate-800 border border-slate-700">XP {gameState.currentXp} / {xpNeeded}</span>{isBuffActive && <span className={`text-xs font-bold ${isDebuff ? 'text-red-400' : 'text-purple-400'} animate-pulse flex items-center gap-1`}>{getIcon(isDebuff ? "TriangleAlert" : "Clock", "w-3 h-3")} {buffPercentage}% XP</span>}</div>
+             <div className="flex mb-2 items-center justify-between"><span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-blue-100 bg-slate-800 border border-slate-700">Lvl {gameState.level} • XP {gameState.currentXp} / {xpNeeded}</span>{isBuffActive && <span className={`text-xs font-bold ${isDebuff ? 'text-red-400' : 'text-purple-400'} animate-pulse flex items-center gap-1`}>{getIcon(isDebuff ? "TriangleAlert" : "Clock", "w-3 h-3")} {buffPercentage}% XP</span>}</div>
              <ProgressBar current={gameState.currentXp} max={xpNeeded} />
           </div>
         </div>
