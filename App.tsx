@@ -191,9 +191,7 @@ export default function App() {
     const newAttributes = { ...gameState.attributes };
 
     // --- TERRITORY BATTLE LOGIC ---
-    // If we are battling a territory enemy, we call the firebase function instead of normal log
     if (territoryBattleEnemyId && selectedTerritory && currentUser) {
-        // Simple amount calculation based on input
         let battleAmount = 0;
         if (selectedActivity.unit === 'reps' || selectedActivity.unit === 'série') battleAmount = Number(gymReps || inputAmount) || 0;
         else if (selectedActivity.unit === 'km') battleAmount = Number(runDistance || inputAmount) || 0;
@@ -206,9 +204,7 @@ export default function App() {
         setIsActivityModalOpen(false);
         setTerritoryBattleEnemyId(null);
         setSelectedActivity(null);
-        return; // Skip normal logging for territory battles? Or do both? Prompt implies challenge, usually separate.
-        // If user wants XP from battle, we should probably do standard log logic too.
-        // Let's continue to standard log logic below so they get XP.
+        return; 
     }
     
     // ... Standard Log Logic ...
@@ -413,6 +409,17 @@ export default function App() {
       </Modal>
       {/* Activity Modal reused for Battles */}
       <Modal isOpen={isActivityModalOpen} onClose={() => { setIsActivityModalOpen(false); setInputAmount(''); }} title={selectedActivity?.label || 'Registrar Atividade'}>
+          {/* TIMER DISPLAY FIX */}
+          {timerTimeLeft > 0 && (
+            <div className="mb-4 p-4 bg-slate-900 border border-blue-500/50 rounded-xl flex items-center justify-between animate-pulse-fast shadow-lg shadow-blue-500/10">
+              <div className="flex items-center gap-2 text-blue-400">
+                {getIcon("Timer")} <span className="font-bold text-lg uppercase tracking-wider">Descanso</span>
+              </div>
+              <span className="text-3xl font-mono font-black text-white">
+                {Math.floor(timerTimeLeft / 60)}:{(timerTimeLeft % 60).toString().padStart(2, '0')}
+              </span>
+            </div>
+          )}
           {/* ... Content identical to before, just triggered by battle ... */}
           {/* The handleLogActivity function handles the logic switch based on territoryBattleEnemyId */}
           <div className="space-y-6">
@@ -442,6 +449,24 @@ export default function App() {
              <div className="space-y-4"><div><label className="block text-xs font-bold text-slate-400 uppercase mb-2">Quantidade ({selectedActivity?.unit})</label><input type="number" value={inputAmount} onChange={(e) => setInputAmount(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-4 text-white text-2xl font-bold text-center" autoFocus /></div><button onClick={handleLogActivity} className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2">{getIcon("CheckCircle", "w-5 h-5")} Confirmar</button></div>
           )}
           </div>
+      </Modal>
+
+      {/* SLEEP MODAL RESTORED */}
+      <Modal isOpen={isSleepModalOpen} onClose={() => setIsSleepModalOpen(false)} title="Registrar Sono">
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className="block text-xs text-slate-400 mb-1 font-bold uppercase">Dormiu às</label><input type="time" value={bedTime} onChange={e => setBedTime(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" /></div>
+            <div><label className="block text-xs text-slate-400 mb-1 font-bold uppercase">Acordou às</label><input type="time" value={wakeTime} onChange={e => setWakeTime(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" /></div>
+          </div>
+          <div className="p-3 bg-indigo-900/30 border border-indigo-500/30 rounded-lg text-xs text-indigo-200">
+             <strong className="text-indigo-400">Regra do Descanso:</strong><br/>
+             9h de sono concede o Bônus Máximo (+18%).<br/>
+             Dormir menos ou mais que o ideal reduz a efetividade do Buff.
+          </div>
+          <button onClick={handleRegisterSleep} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20">
+             {getIcon("Moon")} CONFIRMAR SONO
+          </button>
+        </div>
       </Modal>
     </div>
   );
