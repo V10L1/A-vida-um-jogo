@@ -1,6 +1,7 @@
 
 // @ts-ignore
 import { initializeApp } from "firebase/app";
+// @ts-ignore
 import { 
   getAuth, 
   GoogleAuthProvider, 
@@ -8,7 +9,8 @@ import {
   signOut, 
   getRedirectResult,
   createUserWithEmailAndPassword,
-  signInWithEmailAndPassword
+  signInWithEmailAndPassword,
+  onAuthStateChanged
 } from "firebase/auth";
 import { 
   getFirestore, 
@@ -125,6 +127,11 @@ export const checkRedirectResult = async () => {
 export const logoutUser = async () => {
   if (!auth) return;
   await signOut(auth);
+};
+
+export const subscribeToAuth = (callback: (user: any) => void) => {
+  if (!auth) return () => {};
+  return onAuthStateChanged(auth, callback);
 };
 
 export const saveUserDataToCloud = async (userId: string, user: UserProfile, gameState: GameState): Promise<boolean> => {
