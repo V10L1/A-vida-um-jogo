@@ -225,7 +225,7 @@ export default function App() {
 
     // Check if timer is running for gym
     if (selectedActivity.id === 'gym' && timerTimeLeft > 0) {
-        alert("Aguarde o cronômetro zerar ou cancele o descanso.");
+        alert("Aguarde o tempo de descanso terminar ou cancele o timer para registrar a próxima série.");
         return;
     }
 
@@ -359,10 +359,10 @@ export default function App() {
                           </span>
                           <div className="flex gap-2 w-full">
                               <button onClick={handleAddTimerTime} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white text-xs py-2 rounded flex items-center justify-center gap-1">
-                                  {getIcon("Plus", "w-3 h-3")} +30s
+                                  {getIcon("Plus", "w-3 h-3")} 30s
                               </button>
                               <button onClick={handleCancelTimer} className="flex-1 bg-red-900/50 hover:bg-red-900 text-red-300 text-xs py-2 rounded flex items-center justify-center gap-1">
-                                  {getIcon("X", "w-3 h-3")} Cancelar Tempo
+                                  {getIcon("X", "w-3 h-3")} Parar
                               </button>
                           </div>
                       </div>
@@ -386,7 +386,7 @@ export default function App() {
               <button 
                 onClick={handleLogActivity} 
                 disabled={selectedActivity.id === 'gym' && timerTimeLeft > 0}
-                className={`w-full font-bold py-4 rounded-xl mt-6 shadow-lg shadow-blue-900/20 active:scale-95 transition-all flex items-center justify-center gap-2 ${selectedActivity.id === 'gym' && timerTimeLeft > 0 ? 'bg-slate-700 text-slate-500 cursor-not-allowed opacity-50' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
+                className={`w-full font-bold py-4 rounded-xl mt-6 shadow-lg shadow-blue-900/20 active:scale-95 transition-all flex items-center justify-center gap-2 ${selectedActivity.id === 'gym' && timerTimeLeft > 0 ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
               > 
                 {selectedActivity.id === 'gym' && timerTimeLeft > 0 ? (
                     <>
