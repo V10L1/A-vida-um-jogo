@@ -21,6 +21,7 @@ export function useGameState() {
   const [narratorText, setNarratorText] = useState("Bem-vindo ao LifeRPG.");
   const [loadingAi, setLoadingAi] = useState(false);
   const [showLevelUp, setShowLevelUp] = useState(false);
+  const [loadingAuth, setLoadingAuth] = useState(true); // Novo estado para evitar flicker
   
   const hasNarratorRunRef = useRef(false);
 
@@ -48,48 +49,47 @@ export function useGameState() {
 
   // Auth & Initial Load
   useEffect(() => {
-    // 1. Verificar se houve retorno de redirecionamento do Google
-    checkRedirectResult();
+    const initAuth = async () => {
+      setLoadingAuth(true);
+      // Verificar se houve retorno de redirecionamento do Google
+      await checkRedirectResult();
 
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      setCurrentUser(firebaseUser);
-      if (firebaseUser) {
-        setIsSyncing(true);
-        const cloudData = await loadUserDataFromCloud(firebaseUser.uid);
-        if (cloudData) {
-          setUser(cloudData.userProfile);
-          const cloudGame = cloudData.gameState;
-          const { quests, lastDaily, lastWeekly } = generateNewQuests(
-            cloudGame.quests || [], cloudGame.classTitle || "NPC",
-            cloudGame.lastDailyQuestGen, cloudGame.lastWeeklyQuestGen
-          );
-          const newState = { ...cloudGame, quests, lastDailyQuestGen: lastDaily, lastWeeklyQuestGen: lastWeekly };
-          setGameState(newState);
-          if (!hasNarratorRunRef.current) {
-            hasNarratorRunRef.current = true;
-            updateNarrator(cloudData.userProfile, newState, undefined, 'login');
+      const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+        setCurrentUser(firebaseUser);
+        if (firebaseUser) {
+          const cloudData = await loadUserDataFromCloud(firebaseUser.uid);
+          if (cloudData) {
+            setUser(cloudData.userProfile);
+            const cloudGame = cloudData.gameState;
+            const { quests, lastDaily, lastWeekly } = generateNewQuests(
+              cloudGame.quests || [], cloudGame.classTitle || "NPC",
+              cloudGame.lastDailyQuestGen, cloudGame.lastWeeklyQuestGen
+            );
+            const newState = { ...cloudGame, quests, lastDailyQuestGen: lastDaily, lastWeeklyQuestGen: lastWeekly };
+            setGameState(newState);
+            if (!hasNarratorRunRef.current) {
+              hasNarratorRunRef.current = true;
+              updateNarrator(cloudData.userProfile, newState, undefined, 'login');
+            }
+          } else {
+            // Usuário logado mas sem perfil no Firestore (ex: novo login Google)
+            setUser(null);
           }
+        } else {
+          setUser(null);
+          setGameState(initialGameState);
+          hasNarratorRunRef.current = false;
+          localStorage.removeItem('liferpg_user');
         }
-        setIsSyncing(false);
-      } else {
-        // CRITICAL: Limpar estados locais imediatamente no logout para atualizar a UI
-        setUser(null);
-        setGameState(initialGameState);
-        hasNarratorRunRef.current = false;
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // Persistence
-  useEffect(() => {
-    if (user && currentUser) {
-      localStorage.setItem('liferpg_user', JSON.stringify(user));
-      saveUserDataToCloud(currentUser.uid, user, gameState).then(s => {
-        if (!s) localStorage.setItem('liferpg_needs_sync', 'true');
+        setLoadingAuth(false);
       });
-    }
-  }, [user, gameState, currentUser]);
+      return unsubscribe;
+    };
+
+    let unsub: any;
+    initAuth().then(u => unsub = u);
+    return () => unsub && unsub();
+  }, []);
 
   const updateNarrator = async (u: UserProfile, g: GameState, activityName?: string, trigger: NarratorTrigger = 'activity') => {
     if (!navigator.onLine) {
@@ -159,6 +159,6 @@ export function useGameState() {
     gameState, setGameState,
     currentUser, isSyncing, isOnline,
     narratorText, loadingAi, showLevelUp,
-    addLog, updateNarrator
+    addLog, updateNarrator, loadingAuth
   };
 }

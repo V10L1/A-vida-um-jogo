@@ -18,7 +18,7 @@ const ACTIVITY_CATEGORIES = [
 ];
 
 export default function App() {
-  const { user, setUser, gameState, setGameState, currentUser, isSyncing, isOnline, narratorText, loadingAi, showLevelUp, addLog } = useGameState() as any;
+  const { user, setUser, gameState, setGameState, currentUser, isSyncing, isOnline, narratorText, loadingAi, showLevelUp, addLog, loadingAuth } = useGameState() as any;
   const { timerTimeLeft, isResting, startTimer, stopTimer, addTime } = useTimer();
 
   // UI States
@@ -45,9 +45,12 @@ export default function App() {
   const [bedTime, setBedTime] = useState('22:00');
   const [wakeTime, setWakeTime] = useState('06:00');
 
-  // Auth/Guild States
+  // Auth States
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  // Guild States
   const [guildInputId, setGuildInputId] = useState('');
   const [guildCreateName, setGuildCreateName] = useState('');
   const [currentGuild, setCurrentGuild] = useState<Guild | null>(null);
@@ -134,21 +137,15 @@ export default function App() {
     }
   };
 
-  const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleFinalizeHero = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (!currentUser) return;
     const formData = new FormData(e.currentTarget);
     const weight = Number(formData.get('weight'));
     const height = Number(formData.get('height'));
-    const password = formData.get('password') as string;
-    const confirmPassword = formData.get('confirmPassword') as string;
-
-    if (password !== confirmPassword) {
-        alert("As senhas não coincidem!");
-        return;
-    }
-
+    
+    setIsLoggingIn(true);
     try {
-        const firebaseUser = await registerWithEmail(authEmail, password);
         const newUser: UserProfile = {
             name: formData.get('name') as string,
             dob: formData.get('dob') as string,
@@ -160,14 +157,62 @@ export default function App() {
         const initialAttrs = { STR: 0, END: bmiBonus, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0 };
         setUser(newUser);
         setGameState((prev: GameState) => ({ ...prev, attributes: initialAttrs }));
-        await saveUserDataToCloud(firebaseUser.user.uid, newUser, { ...gameState, attributes: initialAttrs });
+        await saveUserDataToCloud(currentUser.uid, newUser, { ...gameState, attributes: initialAttrs });
     } catch (e: any) { alert(e.message); }
+    finally { setIsLoggingIn(false); }
   };
 
-  if (!user) {
+  const onEmailLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoggingIn(true);
+    try {
+      await loginWithEmail(authEmail, authPassword);
+    } catch (err: any) {
+      alert("Erro ao entrar: " + err.message);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const onEmailRegisterInit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    // Apenas validando se a senha coincide antes de criar conta Firebase
+    const form = e.currentTarget as HTMLFormElement;
+    const pass = (form.elements.namedItem('password') as HTMLInputElement).value;
+    const confirm = (form.elements.namedItem('confirmPassword') as HTMLInputElement).value;
+    if (pass !== confirm) { alert("Senhas não coincidem!"); return; }
+    
+    setIsLoggingIn(true);
+    try {
+      await registerWithEmail(authEmail, pass);
+      // O estado de currentUser mudará, e o app mostrará a tela de criação de herói
+    } catch (err: any) {
+      alert("Erro ao criar conta: " + err.message);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const onLogout = async () => {
+    await logoutUser();
+    // O hook useGameState lidará com a limpeza dos estados
+  };
+
+  // 1. Tela de Carregamento Inicial
+  if (loadingAuth) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 gap-4">
+        <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+        <div className="text-xs font-black text-blue-400 uppercase tracking-widest animate-pulse">Invocando Dados...</div>
+      </div>
+    );
+  }
+
+  // 2. Tela de Login / Início de Cadastro (Se não houver usuário Firebase)
+  if (!currentUser) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-slate-950 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black">
-        <div className="w-full max-w-md bg-slate-900/40 p-1 rounded-3xl shadow-2xl border border-white/5 backdrop-blur-xl animate-fade-in-up">
+        <div className="w-full max-w-md bg-slate-900/40 p-1 rounded-3xl shadow-2xl border border-white/5 backdrop-blur-xl">
             <div className="p-6">
                 <div className="text-center mb-8">
                     <h1 className="text-4xl font-black text-white tracking-tighter italic uppercase">Life<span className="text-blue-500">RPG</span></h1>
@@ -176,87 +221,52 @@ export default function App() {
 
                 <div className="flex bg-slate-950/50 p-1 rounded-2xl mb-8 border border-white/5">
                     <button onClick={() => setAuthView('login')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${authView === 'login' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>ENTRAR</button>
-                    <button onClick={() => setAuthView('register')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${authView === 'register' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>CRIAR HERÓI</button>
+                    <button onClick={() => setAuthView('register')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${authView === 'register' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>CRIAR CONTA</button>
                 </div>
 
                 {authView === 'login' ? (
-                    <form onSubmit={(e) => { e.preventDefault(); loginWithEmail(authEmail, authPassword); }} className="space-y-4">
+                    <form onSubmit={onEmailLogin} className="space-y-4">
                         <div className="space-y-1">
                             <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">E-mail</label>
-                            <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition-all shadow-inner" placeholder="heroi@liferpg.com" />
+                            <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none shadow-inner" placeholder="heroi@liferpg.com" />
                         </div>
                         <div className="space-y-1">
                             <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Senha</label>
-                            <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition-all shadow-inner" placeholder="••••••••" />
+                            <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none shadow-inner" placeholder="••••••••" />
                         </div>
-                        <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-2xl shadow-xl transition-all uppercase tracking-widest text-sm active:scale-95 border-b-4 border-blue-800">ACESSAR PORTAL</button>
+                        <button type="submit" disabled={isLoggingIn} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-2xl shadow-xl transition-all uppercase tracking-widest text-sm active:scale-95 border-b-4 border-blue-800 disabled:opacity-50">
+                          {isLoggingIn ? 'ENTRANDO...' : 'ACESSAR PORTAL'}
+                        </button>
                         
                         <div className="relative py-4">
                             <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-white/5"></div></div>
                             <div className="relative flex justify-center text-[8px] uppercase font-black tracking-widest"><span className="bg-[#0b101b] px-3 text-slate-600">Ou use sua conta</span></div>
                         </div>
 
-                        <button type="button" onClick={loginWithGoogle} className="w-full bg-white/5 hover:bg-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-3 transition-all border border-white/10">
+                        <button type="button" onClick={() => loginWithGoogle()} className="w-full bg-white/5 hover:bg-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-3 transition-all border border-white/10">
                             <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" />
                             <span className="text-[10px] uppercase tracking-widest">Entrar com Google</span>
                         </button>
                     </form>
                 ) : (
-                    <form onSubmit={handleRegister} className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-                        <div className="grid grid-cols-1 gap-4">
-                            <div className="space-y-1">
-                                <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Codinome do Herói</label>
-                                <input name="name" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" placeholder="Ex: Arthur Morgan" />
-                            </div>
-                            
-                            <div className="grid grid-cols-2 gap-3">
-                                <div className="space-y-1">
-                                    <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Peso (kg)</label>
-                                    <input type="number" name="weight" step="0.1" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" placeholder="00.0" />
-                                </div>
-                                <div className="space-y-1">
-                                    <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Altura (cm)</label>
-                                    <input type="number" name="height" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" placeholder="180" />
-                                </div>
-                            </div>
-
-                            <div className="space-y-1">
-                                <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Nascimento</label>
-                                <input type="date" name="dob" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" />
-                            </div>
-
-                            <div className="space-y-1">
-                                <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Gênero</label>
-                                <select name="gender" className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner appearance-none">
-                                    <option value="Masculino">Masculino</option>
-                                    <option value="Feminino">Feminino</option>
-                                    <option value="Outros">Outros</option>
-                                </select>
-                            </div>
-
-                            <div className="space-y-1">
-                                <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Profissão / Arquétipo</label>
-                                <input name="profession" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" placeholder="Ex: Desenvolvedor de Software" />
-                            </div>
-
-                            <div className="space-y-1 border-t border-white/5 pt-4">
-                                <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">E-mail de Login</label>
-                                <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none shadow-inner" placeholder="heroi@liferpg.com" />
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-3">
-                                <div className="space-y-1">
-                                    <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Senha</label>
-                                    <input type="password" name="password" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none shadow-inner" placeholder="••••••••" />
-                                </div>
-                                <div className="space-y-1">
-                                    <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Confirmar</label>
-                                    <input type="password" name="confirmPassword" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none shadow-inner" placeholder="••••••••" />
-                                </div>
-                            </div>
-
-                            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-2xl shadow-xl transition-all uppercase tracking-widest text-sm mt-4 active:scale-95 border-b-4 border-blue-800">INICIAR JORNADA</button>
+                    <form onSubmit={onEmailRegisterInit} className="space-y-4">
+                        <div className="space-y-1">
+                            <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">E-mail</label>
+                            <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" placeholder="exemplo@email.com" />
                         </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                                <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Senha</label>
+                                <input type="password" name="password" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none shadow-inner" placeholder="••••••••" />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Confirmar</label>
+                                <input type="password" name="confirmPassword" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none shadow-inner" placeholder="••••••••" />
+                            </div>
+                        </div>
+                        <button type="submit" disabled={isLoggingIn} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-2xl shadow-xl transition-all uppercase tracking-widest text-sm mt-4 active:scale-95 border-b-4 border-blue-800">
+                          {isLoggingIn ? 'CRIANDO...' : 'CRIAR CONTA'}
+                        </button>
                     </form>
                 )}
             </div>
@@ -265,6 +275,66 @@ export default function App() {
     );
   }
 
+  // 3. Tela de Criação de Herói (Se logado Firebase mas sem perfil RPG)
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-slate-950 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black">
+        <div className="w-full max-w-md bg-slate-900/40 p-1 rounded-3xl shadow-2xl border border-white/5 backdrop-blur-xl">
+            <div className="p-6">
+                <div className="text-center mb-6">
+                    <h2 className="text-2xl font-black text-white italic uppercase tracking-tighter">Criação do <span className="text-blue-500">Herói</span></h2>
+                    <p className="text-[9px] text-slate-500 uppercase font-black tracking-widest mt-1">Defina seus atributos iniciais</p>
+                </div>
+
+                <form onSubmit={handleFinalizeHero} className="space-y-4 max-h-[70vh] overflow-y-auto pr-2 custom-scrollbar">
+                    <div className="space-y-1">
+                        <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Codinome</label>
+                        <input name="name" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" placeholder="Ex: Arthur Morgan" />
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                            <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Peso (kg)</label>
+                            <input type="number" name="weight" step="0.1" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" placeholder="00.0" />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Altura (cm)</label>
+                            <input type="number" name="height" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" placeholder="180" />
+                        </div>
+                    </div>
+
+                    <div className="space-y-1">
+                        <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Nascimento</label>
+                        <input type="date" name="dob" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" />
+                    </div>
+
+                    <div className="space-y-1">
+                        <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Gênero</label>
+                        <select name="gender" className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner appearance-none">
+                            <option value="Masculino">Masculino</option>
+                            <option value="Feminino">Feminino</option>
+                            <option value="Outros">Outros</option>
+                        </select>
+                    </div>
+
+                    <div className="space-y-1">
+                        <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Profissão / Estudo</label>
+                        <input name="profession" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" placeholder="Ex: Dev, Estudante, etc" />
+                    </div>
+
+                    <button type="submit" disabled={isLoggingIn} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-2xl shadow-xl transition-all uppercase tracking-widest text-sm mt-4 border-b-4 border-blue-800">
+                      {isLoggingIn ? 'SALVANDO...' : 'INICIAR JORNADA'}
+                    </button>
+
+                    <button type="button" onClick={onLogout} className="w-full text-slate-500 text-[9px] font-black uppercase tracking-widest hover:text-red-400 transition-colors py-2">Cancelar e Sair</button>
+                </form>
+            </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 4. Interface Principal do App (Usuário logado e com perfil)
   return (
     <div className="min-h-screen bg-slate-950 text-white pb-24 md:pb-6 relative overflow-hidden">
       {showLevelUp && (
@@ -326,7 +396,7 @@ export default function App() {
             <button onClick={() => setIsGuildModalOpen(true)} className="flex items-center gap-2 text-xs font-bold bg-slate-800 p-3 rounded-xl border border-slate-700 hover:border-blue-500 transition-all active:scale-95 shadow-md">
                 {getIcon("Shield", "w-4 h-4")} CLÃ
             </button>
-            <button onClick={() => logoutUser()} className="flex items-center gap-2 text-xs font-bold bg-red-900/20 text-red-400 p-3 rounded-xl border border-red-900/50 hover:bg-red-900/40 transition-all active:scale-95 shadow-md">
+            <button onClick={onLogout} className="flex items-center gap-2 text-xs font-bold bg-red-900/20 text-red-400 p-3 rounded-xl border border-red-900/50 hover:bg-red-900/40 transition-all active:scale-95 shadow-md">
                 {getIcon("LogOut", "w-4 h-4")} SAIR
             </button>
         </div>
