@@ -45,9 +45,9 @@ export interface ActivityLog {
     weapon?: string; 
     hits?: {
         center: number;
-        c1: number;
-        c2: number;
-        c3: number;
+        contour1: number;
+        contour2: number;
+        contour3: number;
         outer: number;
     };
   };
