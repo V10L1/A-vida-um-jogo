@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { UserProfile, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, ActivityLog, Guild, GuildMember, ChatMessage, Quest, GameState } from './types';
 import { getIcon } from './components/Icons';
-import { loginWithGoogle, logoutUser, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail, saveUserDataToCloud } from './firebase';
+import { loginWithGoogle, logoutUser, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail, saveUserDataToCloud, checkRedirectResult } from './firebase';
 import { ProgressBar, Modal, RadarChart } from './components/UIElements';
 import { useGameState } from './hooks/useGameState';
 import { useTimer } from './hooks/useTimer';
@@ -56,6 +56,15 @@ export default function App() {
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const xpNeeded = calculateXpForNextLevel(gameState.level);
+
+  // Verificar redirecionamento do Google no carregamento
+  useEffect(() => {
+    checkRedirectResult().then(u => {
+      if (u) {
+          console.log("Login via Google detectado com sucesso!");
+      }
+    });
+  }, []);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -139,8 +148,16 @@ export default function App() {
     const formData = new FormData(e.currentTarget);
     const weight = Number(formData.get('weight'));
     const height = Number(formData.get('height'));
+    const password = formData.get('password') as string;
+    const confirmPassword = formData.get('confirmPassword') as string;
+
+    if (password !== confirmPassword) {
+        alert("As senhas não coincidem!");
+        return;
+    }
+
     try {
-        const firebaseUser = await registerWithEmail(authEmail, authPassword);
+        const firebaseUser = await registerWithEmail(authEmail, password);
         const newUser: UserProfile = {
             name: formData.get('name') as string,
             dob: formData.get('dob') as string,
@@ -152,37 +169,106 @@ export default function App() {
         const initialAttrs = { STR: 0, END: bmiBonus, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0 };
         setUser(newUser);
         setGameState((prev: GameState) => ({ ...prev, attributes: initialAttrs }));
-        await saveUserDataToCloud(firebaseUser.uid, newUser, { ...gameState, attributes: initialAttrs });
+        await saveUserDataToCloud(firebaseUser.user.uid, newUser, { ...gameState, attributes: initialAttrs });
     } catch (e: any) { alert(e.message); }
   };
 
   if (!user) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950">
-        <div className="w-full max-w-md bg-slate-900/80 p-6 rounded-2xl shadow-xl border border-slate-800 backdrop-blur-sm">
-            <div className="flex border-b border-slate-700 mb-6">
-                <button onClick={() => setAuthView('login')} className={`flex-1 pb-2 font-bold ${authView === 'login' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500'}`}>LOGIN</button>
-                <button onClick={() => setAuthView('register')} className={`flex-1 pb-2 font-bold ${authView === 'register' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500'}`}>NOVA JORNADA</button>
+      <div className="min-h-screen flex items-center justify-center p-4 bg-slate-950 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black">
+        <div className="w-full max-w-md bg-slate-900/40 p-1 rounded-3xl shadow-2xl border border-white/5 backdrop-blur-xl animate-fade-in-up">
+            <div className="p-6">
+                <div className="text-center mb-8">
+                    <h1 className="text-4xl font-black text-white tracking-tighter italic uppercase">Life<span className="text-blue-500">RPG</span></h1>
+                    <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest mt-1">Sua vida. Sua lenda. Seu jogo.</p>
+                </div>
+
+                <div className="flex bg-slate-950/50 p-1 rounded-2xl mb-8 border border-white/5">
+                    <button onClick={() => setAuthView('login')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${authView === 'login' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>ENTRAR</button>
+                    <button onClick={() => setAuthView('register')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${authView === 'register' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>CRIAR HERÓI</button>
+                </div>
+
+                {authView === 'login' ? (
+                    <form onSubmit={(e) => { e.preventDefault(); loginWithEmail(authEmail, authPassword); }} className="space-y-4">
+                        <div className="space-y-1">
+                            <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">E-mail</label>
+                            <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition-all shadow-inner" placeholder="heroi@liferpg.com" />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Senha</label>
+                            <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none transition-all shadow-inner" placeholder="••••••••" />
+                        </div>
+                        <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-2xl shadow-xl transition-all uppercase tracking-widest text-sm active:scale-95 border-b-4 border-blue-800">ACESSAR PORTAL</button>
+                        
+                        <div className="relative py-4">
+                            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-white/5"></div></div>
+                            <div className="relative flex justify-center text-[8px] uppercase font-black tracking-widest"><span className="bg-[#0b101b] px-3 text-slate-600">Ou use sua conta</span></div>
+                        </div>
+
+                        <button type="button" onClick={loginWithGoogle} className="w-full bg-white/5 hover:bg-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-3 transition-all border border-white/10">
+                            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" />
+                            <span className="text-[10px] uppercase tracking-widest">Entrar com Google</span>
+                        </button>
+                    </form>
+                ) : (
+                    <form onSubmit={handleRegister} className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                        <div className="grid grid-cols-1 gap-4">
+                            <div className="space-y-1">
+                                <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Codinome do Herói</label>
+                                <input name="name" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" placeholder="Ex: Arthur Morgan" />
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                    <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Peso (kg)</label>
+                                    <input type="number" name="weight" step="0.1" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" placeholder="00.0" />
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Altura (cm)</label>
+                                    <input type="number" name="height" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" placeholder="180" />
+                                </div>
+                            </div>
+
+                            <div className="space-y-1">
+                                <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Nascimento</label>
+                                <input type="date" name="dob" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" />
+                            </div>
+
+                            <div className="space-y-1">
+                                <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Gênero</label>
+                                <select name="gender" className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner appearance-none">
+                                    <option value="Masculino">Masculino</option>
+                                    <option value="Feminino">Feminino</option>
+                                    <option value="Outros">Outros</option>
+                                </select>
+                            </div>
+
+                            <div className="space-y-1">
+                                <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Profissão / Arquétipo</label>
+                                <input name="profession" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white outline-none focus:border-blue-500 shadow-inner" placeholder="Ex: Desenvolvedor de Software" />
+                            </div>
+
+                            <div className="space-y-1 border-t border-white/5 pt-4">
+                                <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">E-mail de Login</label>
+                                <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none shadow-inner" placeholder="heroi@liferpg.com" />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                    <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Senha</label>
+                                    <input type="password" name="password" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none shadow-inner" placeholder="••••••••" />
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[9px] text-slate-500 font-black uppercase ml-2 tracking-widest">Confirmar</label>
+                                    <input type="password" name="confirmPassword" required className="w-full bg-slate-950 border border-white/5 rounded-2xl p-4 text-white focus:border-blue-500 outline-none shadow-inner" placeholder="••••••••" />
+                                </div>
+                            </div>
+
+                            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-2xl shadow-xl transition-all uppercase tracking-widest text-sm mt-4 active:scale-95 border-b-4 border-blue-800">INICIAR JORNADA</button>
+                        </div>
+                    </form>
+                )}
             </div>
-            {authView === 'login' ? (
-                <form onSubmit={(e) => { e.preventDefault(); loginWithEmail(authEmail, authPassword); }} className="space-y-4">
-                    <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" placeholder="E-mail" />
-                    <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" placeholder="Senha" />
-                    <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl">Entrar</button>
-                    <button type="button" onClick={loginWithGoogle} className="w-full bg-slate-800 text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2">{getIcon("User", "w-4 h-4")} Google</button>
-                </form>
-            ) : (
-                <form onSubmit={handleRegister} className="space-y-4">
-                    <input name="name" placeholder="Nome Herói" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2" />
-                    <div className="grid grid-cols-2 gap-2">
-                        <input type="number" name="weight" placeholder="Peso" step="0.1" required className="bg-slate-950 border border-slate-700 p-2 rounded" />
-                        <input type="number" name="height" placeholder="Altura" required className="bg-slate-950 border border-slate-700 p-2 rounded" />
-                    </div>
-                    <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded p-2" placeholder="E-mail" />
-                    <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded p-2" placeholder="Senha" />
-                    <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl">Criar Personagem</button>
-                </form>
-            )}
         </div>
       </div>
     );
@@ -273,14 +359,11 @@ export default function App() {
                         {getIcon("ChevronRight", "w-4 h-4 text-slate-600")}
                     </button>
                 ))}
-                {currentCategory && ACTIVITIES.filter(act => ACTIVITY_CATEGORIES.find(c => c.id === currentCategory)?.types.includes(act.category)).length === 0 && (
-                   <p className="text-center text-slate-500 py-4 text-xs">Nenhuma atividade nesta categoria ainda.</p>
-                )}
             </div>
         ) : isResting ? (
              <div className="text-center py-6 space-y-6">
                  <div className="text-xs text-slate-400 uppercase font-black tracking-widest">Tempo de Descanso</div>
-                 <div className="text-7xl font-black tabular-nums text-blue-400 drop-shadow-[0_0_15px_rgba(59,130,246,0.5)]">
+                 <div className="text-7xl font-black tabular-nums text-blue-400 drop-shadow-[0_0_10px_rgba(59,130,246,0.5)]">
                     {Math.floor(timerTimeLeft/60)}:{(timerTimeLeft%60).toString().padStart(2, '0')}
                  </div>
                  <div className="flex gap-4 justify-center">
