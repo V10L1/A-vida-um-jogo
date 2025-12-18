@@ -5,7 +5,7 @@ import { getIcon } from './components/Icons';
 import { generateRpgFlavorText, NarratorTrigger } from './services/geminiService';
 import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail, getGlobalRanking, createDuel, fetchActiveDuels, acceptDuel, updateDuelProgress, cancelDuel, createTerritory, deleteTerritory, subscribeToTerritories, attackTerritoryTarget, banUser, isFirebaseReady, addEnemyToTerritory, getUserTerritoryStats, subscribeToAuth } from './firebase';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap, useMapEvents } from 'react-leaflet';
-import * as L from 'leaflet';
+import L from 'leaflet';
 
 function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
   var R = 6371; var dLat = deg2rad(lat2-lat1); var dLon = deg2rad(lon2-lon1); 
