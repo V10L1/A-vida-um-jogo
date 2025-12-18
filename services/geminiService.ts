@@ -1,3 +1,4 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { UserProfile, GameState, ACTIVITIES } from "../types";
 
@@ -75,8 +76,9 @@ export const generateRpgFlavorText = async (
       Não use Markdown. Apenas texto puro.
     `;
 
+    // FIX: Update model to gemini-3-flash-preview as per the latest guidelines for text tasks.
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       contents: prompt,
     });
 
@@ -101,8 +103,9 @@ export const generateClassTitle = async (gameState: GameState): Promise<string> 
           Apenas o título, nada mais. Máximo 4 palavras.
         `;
     
+        // FIX: Update model to gemini-3-flash-preview as per the latest guidelines for text tasks.
         const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3-flash-preview',
           contents: prompt,
         });
     

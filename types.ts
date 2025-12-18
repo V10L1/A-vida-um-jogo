@@ -1,5 +1,4 @@
 
-
 export type Gender = 'Masculino' | 'Feminino' | 'Outros';
 
 export interface UserProfile {
@@ -9,18 +8,9 @@ export interface UserProfile {
   height: number;
   gender: Gender;
   profession: string;
-  avatarImage?: string; // Base64 string da imagem customizada
+  avatarImage?: string; 
 }
 
-// Novos Atributos de RPG
-// STR: Força Bruta (Low Reps)
-// END: Resistência Muscular (High Reps)
-// VIG: Fôlego/Cardio (Novo)
-// AGI: Velocidade
-// DEX: Coordenação
-// INT: Mente
-// CHA: Social
-// DRV: Direção
 export type Attribute = 'STR' | 'END' | 'VIG' | 'AGI' | 'DEX' | 'INT' | 'CHA' | 'DRV';
 
 export interface ActivityType {
@@ -30,7 +20,6 @@ export interface ActivityType {
   unit: string;
   icon: string;
   category: 'fitness' | 'intellect' | 'health' | 'combat' | 'social' | 'bad_habit';
-  // Agora a atividade dá pontos para atributos especificos
   primaryAttribute?: Attribute;
   secondaryAttribute?: Attribute;
 }
@@ -41,42 +30,40 @@ export interface ActivityLog {
   amount: number;
   xpGained: number;
   timestamp: number;
-  // Detalhes opcionais para treinos complexos (Musculação e Corrida)
   details?: {
     exercise?: string;
     weight?: number;
     reps?: number;
     restTime?: number;
-    distance?: number; // km
-    duration?: string; // MM:SS
-    pace?: string; // MM:SS /km
-    // Detalhes de Tiro / Arco / Faca
-    weapon?: string; // Suporta Armas de Fogo, Arcos e Estilos de Faca
+    distance?: number; 
+    duration?: string; 
+    pace?: string; 
+    weapon?: string; 
     hits?: {
         center: number;
-        contour1: number;
-        contour2: number;
-        contour3: number;
+        c1: number;
+        c2: number;
+        c3: number;
         outer: number;
     };
   };
 }
 
 export interface XpBuff {
-  multiplier: number; // ex: 1.16 para +16% (ou 0.5 para -50%)
-  expiresAt: number; // Timestamp de quando acaba
+  multiplier: number; 
+  expiresAt: number; 
   description: string;
 }
 
 export interface Quest {
   id: string;
   type: 'daily' | 'weekly';
-  activityId: string; // Qual atividade precisa ser feita
-  targetAmount: number; // Meta (ex: 5km, 100 flexoes)
-  currentAmount: number; // Progresso atual
-  xpReward: number; // Recompensa em XP
-  isClaimed: boolean; // Se ja pegou o premio
-  createdAt: number; // Para saber quando expira
+  activityId: string; 
+  targetAmount: number; 
+  currentAmount: number; 
+  xpReward: number; 
+  isClaimed: boolean; 
+  createdAt: number; 
 }
 
 export interface GuildMember {
@@ -94,15 +81,15 @@ export interface ChatMessage {
     senderName: string;
     text: string;
     timestamp: number;
-    type: 'text' | 'system'; // System para avisos de Boss/Level Up
+    type: 'text' | 'system'; 
 }
 
 export interface Boss {
     currentHp: number;
     maxHp: number;
     level: number;
-    name: string; // ex: "Dragão da Preguiça", "Golem de Sedentarismo"
-    image: string; // Emoji ou URL
+    name: string; 
+    image: string; 
 }
 
 export interface Guild {
@@ -110,8 +97,8 @@ export interface Guild {
     name: string;
     description: string;
     level: number;
-    members: Record<string, GuildMember>; // Mapa de UID -> Member
-    xp: number; // XP da guilda para subir de nivel
+    members: Record<string, GuildMember>; 
+    xp: number; 
     boss?: Boss;
 }
 
@@ -121,15 +108,14 @@ export interface GameState {
   totalXp: number;
   logs: ActivityLog[];
   classTitle: string; 
-  attributes: Record<Attribute, number>; // Pontos de Atributo (Força, Agilidade, etc)
+  attributes: Record<Attribute, number>; 
   activeBuff?: XpBuff | null;
-  quests: Quest[]; // Lista de missoes ativas
-  lastDailyQuestGen?: number; // Data da ultima geracao diaria
-  lastWeeklyQuestGen?: number; // Data da ultima geracao semanal
-  guildId?: string | null; // ID da guilda se tiver
+  quests: Quest[]; 
+  lastDailyQuestGen?: number; 
+  lastWeeklyQuestGen?: number; 
+  guildId?: string | null; 
 }
 
-// Lista de Classes para Display (Lógica é calculada dinamicamente)
 export const RPG_CLASSES = [
   'Corredor', 'Biker', 'Lutador', 'Guerreiro', 'Tanque', 
   'Berseker', 'Bodybuilder', 'Espadachim', 'Healer', 
@@ -147,50 +133,29 @@ export const ATTRIBUTE_LABELS: Record<Attribute, string> = {
     DRV: 'Volante'
 };
 
-// IDs das atividades básicas para lógica de Quests
-// Sleep removido para não gerar quest, apenas buff
 export const BASIC_ACTIVITY_IDS = ['walk', 'run', 'pushup', 'abs', 'water'];
 
 export const ACTIVITIES: ActivityType[] = [
-  // --- Atividades Básicas (Missões Diárias Padrão) ---
-  // Cardio agora vai para VIG (Vigor) em vez de END
   { id: 'walk', label: 'Caminhada Leve', xpPerUnit: 15, unit: 'km', icon: 'Footprints', category: 'fitness', primaryAttribute: 'VIG' },
   { id: 'run', label: 'Corrida', xpPerUnit: 30, unit: 'km', icon: 'Wind', category: 'fitness', primaryAttribute: 'VIG', secondaryAttribute: 'AGI' },
-  
-  // Calistenia (High Reps) -> Foco em END (Resistência Muscular)
   { id: 'pushup', label: 'Flexões', xpPerUnit: 2, unit: 'reps', icon: 'Dumbbell', category: 'fitness', primaryAttribute: 'STR', secondaryAttribute: 'END' },
   { id: 'abs', label: 'Abdominais', xpPerUnit: 2, unit: 'reps', icon: 'ArrowBigUp', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'STR' },
   { id: 'squat', label: 'Agachamentos', xpPerUnit: 3, unit: 'reps', icon: 'ArrowBigUp', category: 'fitness', primaryAttribute: 'STR', secondaryAttribute: 'END' },
-  
-  // Hidratacao e Sono nao dão pontos de atributo, apenas XP geral e Buffs
   { id: 'water', label: 'Hidratação', xpPerUnit: 10, unit: 'copos (250ml)', icon: 'Droplets', category: 'health' },
   { id: 'sleep', label: 'Registrar Sono', xpPerUnit: 50, unit: 'noite', icon: 'Moon', category: 'health' },
-
-  // --- Atividades Específicas / Classe ---
   { id: 'bike', label: 'Ciclismo', xpPerUnit: 20, unit: 'km', icon: 'Bike', category: 'fitness', primaryAttribute: 'VIG', secondaryAttribute: 'STR' },
-  
-  // Gym xpPerUnit é base, mas será calculado dinamicamente pelo peso x reps
-  // Atributos definidos dinamicamente no App.tsx
   { id: 'gym', label: 'Musculação / Peso', xpPerUnit: 10, unit: 'série', icon: 'Biceps', category: 'fitness' },
-  
   { id: 'hiit', label: 'HIIT / Cardio Intenso', xpPerUnit: 8, unit: 'min', icon: 'Flame', category: 'fitness', primaryAttribute: 'AGI', secondaryAttribute: 'VIG' },
   { id: 'resistence', label: 'Treino de Resistência', xpPerUnit: 5, unit: 'min', icon: 'Shield', category: 'fitness', primaryAttribute: 'END', secondaryAttribute: 'VIG' },
-
-  // --- Combate ---
   { id: 'fight', label: 'Treino de Luta/Boxe', xpPerUnit: 10, unit: 'min', icon: 'Swords', category: 'combat', primaryAttribute: 'STR', secondaryAttribute: 'DEX' },
   { id: 'sword', label: 'Esgrima / Bastão', xpPerUnit: 10, unit: 'min', icon: 'Sword', category: 'combat', primaryAttribute: 'DEX', secondaryAttribute: 'AGI' },
   { id: 'archery', label: 'Arco e Flecha', xpPerUnit: 40, unit: 'sessão', icon: 'Crosshair', category: 'combat', primaryAttribute: 'DEX', secondaryAttribute: 'STR' },
   { id: 'shooting', label: 'Treino de Mira / Tiro', xpPerUnit: 20, unit: 'sessão', icon: 'Target', category: 'combat', primaryAttribute: 'DEX', secondaryAttribute: 'INT' },
   { id: 'knife_throw', label: 'Arremesso de Faca', xpPerUnit: 25, unit: 'sessão', icon: 'MoveDiagonal', category: 'combat', primaryAttribute: 'DEX', secondaryAttribute: 'AGI' },
-
-  // --- Intelectual / Social / Outros ---
   { id: 'study', label: 'Estudo / Leitura', xpPerUnit: 5, unit: 'pág/min', icon: 'BookOpen', category: 'intellect', primaryAttribute: 'INT' },
   { id: 'drive', label: 'Dirigir', xpPerUnit: 2, unit: 'km', icon: 'Car', category: 'intellect', primaryAttribute: 'DRV', secondaryAttribute: 'DEX' },
   { id: 'volunteer', label: 'Boa Ação / Ajuda', xpPerUnit: 150, unit: 'ação', icon: 'Heart', category: 'social', primaryAttribute: 'CHA', secondaryAttribute: 'INT' },
   { id: 'listen', label: 'Ouvir / Aconselhar', xpPerUnit: 10, unit: 'min', icon: 'Brain', category: 'social', primaryAttribute: 'CHA' },
-  
-  // --- Hábitos Nocivos (Debuffs) ---
-  // XP = 0 pois eles tiram XP via Buff negativo
   { id: 'smoke', label: 'Fumar Cigarro', xpPerUnit: 0, unit: 'cigarro', icon: 'Cigarette', category: 'bad_habit' },
   { id: 'alcohol', label: 'Ingerir Álcool', xpPerUnit: 0, unit: 'dose', icon: 'Beer', category: 'bad_habit' },
   { id: 'junk_food', label: 'Comer Besteira', xpPerUnit: 0, unit: 'refeição', icon: 'Pizza', category: 'bad_habit' },

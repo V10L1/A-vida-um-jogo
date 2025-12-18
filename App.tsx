@@ -1,1732 +1,169 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { UserProfile, GameState, ActivityLog, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, Quest, BASIC_ACTIVITY_IDS, Guild, ChatMessage, GuildMember } from './types';
+
+import React, { useState, useMemo, useRef } from 'react';
+import { UserProfile, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, ActivityLog, Guild, ChatMessage, GuildMember } from './types';
 import { getIcon } from './components/Icons';
-import { generateRpgFlavorText, NarratorTrigger } from './services/geminiService';
-import { auth, loginWithGoogle, logoutUser, saveUserDataToCloud, loadUserDataFromCloud, checkRedirectResult, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail } from './firebase';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { loginWithGoogle, logoutUser, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail, saveUserDataToCloud } from './firebase';
+import { ProgressBar, Modal, RadarChart } from './components/UIElements';
+import { useGameState } from './hooks/useGameState';
+import { useTimer } from './hooks/useTimer';
+import { calculateBmiBonus, calculateXpForNextLevel, determineClass } from './logic/gameLogic';
 
-// --- Helper Components ---
-
-const ProgressBar = ({ current, max, color = "bg-blue-500" }: { current: number; max: number; color?: string }) => {
-  const percentage = Math.min(100, Math.max(0, (current / max) * 100));
-  return (
-    <div className="w-full bg-slate-950 rounded-full h-4 overflow-hidden border border-slate-800 shadow-inner">
-      <div
-        className={`h-full ${color} transition-all duration-1000 ease-out flex items-center justify-end pr-1`}
-        style={{ width: `${percentage}%` }}
-      >
-        <div className="w-full h-full bg-white/20 animate-pulse"></div>
-      </div>
-    </div>
-  );
-};
-
-const Modal = ({ isOpen, onClose, title, children, large = false }: { isOpen: boolean; onClose: () => void; title: string; children?: React.ReactNode; large?: boolean }) => {
-  if (!isOpen) return null;
-  return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className={`bg-slate-900 border border-slate-700 rounded-xl w-full ${large ? 'max-w-2xl' : 'max-w-md'} shadow-2xl overflow-hidden animate-fade-in-up max-h-[90vh] overflow-y-auto`}>
-        <div className="bg-slate-800 p-4 flex justify-between items-center border-b border-slate-700 sticky top-0 z-10">
-          <h3 className="text-xl font-bold text-white">{title}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-white p-1">✕</button>
-        </div>
-        <div className="p-4">
-          {children}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// --- Radar Chart Component (Agora exibe Atributos) ---
-const RadarChart = ({ attributes }: { attributes: Record<Attribute, number> }) => {
-  const size = 300;
-  const center = size / 2;
-  const radius = (size / 2) - 40; // Padding
-  
-  // Ordem fixa para o gráfico ficar bonito
-  const attributeKeys: Attribute[] = ['STR', 'AGI', 'DEX', 'DRV', 'INT', 'CHA', 'VIG', 'END'];
-  
-  // Encontrar o valor máximo para normalizar o gráfico (mínimo de 10)
-  const values = attributeKeys.map(k => attributes[k] || 0);
-  const maxVal = Math.max(20, ...values); // Minimo 20 para visual
-
-  // Helper para calcular coordenadas
-  const getCoordinates = (index: number, value: number) => {
-    const angle = (Math.PI * 2 * index) / attributeKeys.length - Math.PI / 2;
-    const r = (value / maxVal) * radius;
-    const x = center + r * Math.cos(angle);
-    const y = center + r * Math.sin(angle);
-    return { x, y };
-  };
-
-  // Gerar o caminho do polígono (seus pontos)
-  const points = attributeKeys.map((key, i) => {
-    const val = attributes[key] || 0;
-    const { x, y } = getCoordinates(i, val);
-    return `${x},${y}`;
-  }).join(" ");
-
-  // Gerar o polígono de fundo
-  const backgroundPoints = attributeKeys.map((_, i) => {
-    const { x, y } = getCoordinates(i, maxVal);
-    return `${x},${y}`;
-  }).join(" ");
-
-  return (
-    <div className="relative flex justify-center py-4">
-      <svg width={size} height={size} className="overflow-visible">
-        {/* Fundo do Radar (Teia) */}
-        <polygon points={backgroundPoints} fill="rgba(30, 41, 59, 0.5)" stroke="#334155" strokeWidth="1" />
-        {[0.25, 0.5, 0.75].map((scale) => (
-             <polygon 
-                key={scale}
-                points={attributeKeys.map((_, i) => {
-                    const { x, y } = getCoordinates(i, maxVal * scale);
-                    return `${x},${y}`;
-                }).join(" ")}
-                fill="none" 
-                stroke="#334155" 
-                strokeWidth="1" 
-                strokeDasharray="4 4"
-             />
-        ))}
-
-        {/* Dados do Jogador */}
-        <polygon points={points} fill="rgba(16, 185, 129, 0.4)" stroke="#10b981" strokeWidth="2" />
-        
-        {/* Círculos nos vértices */}
-        {attributeKeys.map((key, i) => {
-            const val = attributes[key] || 0;
-            const { x, y } = getCoordinates(i, val);
-            return <circle key={i} cx={x} cy={y} r="3" fill="#34d399" />;
-        })}
-
-        {/* Labels */}
-        {attributeKeys.map((key, i) => {
-          const { x, y } = getCoordinates(i, maxVal + (maxVal * 0.18)); 
-          const val = attributes[key] || 0;
-          return (
-            <g key={i}>
-                <text 
-                x={x} 
-                y={y - 5} 
-                textAnchor="middle" 
-                dominantBaseline="middle" 
-                className="text-[10px] fill-slate-300 font-bold uppercase"
-                style={{ fontSize: '10px' }}
-                >
-                {ATTRIBUTE_LABELS[key]}
-                </text>
-                <text 
-                x={x} 
-                y={y + 8} 
-                textAnchor="middle" 
-                dominantBaseline="middle" 
-                className="text-[9px] fill-emerald-400 font-bold"
-                >
-                {Math.floor(val)}
-                </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
-};
-
-// --- Configuração das Categorias Principais ---
 const ACTIVITY_CATEGORIES = [
-  {
-    id: 'common',
-    label: 'Atividades Comuns',
-    types: ['health'], // Inclui Água e Sono
-    color: 'text-yellow-400',
-    icon: 'Star'
-  },
-  { 
-    id: 'physical', 
-    label: 'Treino Físico', 
-    types: ['fitness'], // Removed 'health'
-    color: 'text-blue-400',
-    icon: 'Dumbbell'
-  },
-  { 
-    id: 'combat', 
-    label: 'Treino Combate', 
-    types: ['combat'], 
-    color: 'text-red-400',
-    icon: 'Swords'
-  },
-  { 
-    id: 'intellect', 
-    label: 'Atividades Intelectuais', 
-    types: ['intellect'], 
-    color: 'text-purple-400',
-    icon: 'Brain'
-  },
-  { 
-    id: 'social', 
-    label: 'Bom-feitor', 
-    types: ['social'], 
-    color: 'text-emerald-400', 
-    icon: 'Heart'
-  },
-  {
-    id: 'bad_habit',
-    label: 'Hábitos Nocivos',
-    types: ['bad_habit'],
-    color: 'text-slate-400',
-    icon: 'TriangleAlert'
-  }
+  { id: 'common', label: 'Atividades Comuns', types: ['health'], color: 'text-yellow-400', icon: 'Star' },
+  { id: 'physical', label: 'Treino Físico', types: ['fitness'], color: 'text-blue-400', icon: 'Dumbbell' },
+  { id: 'combat', label: 'Treino Combate', types: ['combat'], color: 'text-red-400', icon: 'Swords' },
+  { id: 'intellect', label: 'Atividades Intelectuais', types: ['intellect'], color: 'text-purple-400', icon: 'Brain' },
+  { id: 'social', label: 'Bom-feitor', types: ['social'], color: 'text-emerald-400', icon: 'Heart' },
+  { id: 'bad_habit', label: 'Hábitos Nocivos', types: ['bad_habit'], color: 'text-slate-400', icon: 'TriangleAlert' }
 ];
 
-// --- Main App ---
-
 export default function App() {
-  // State
-  const [user, setUser] = useState<UserProfile | null>(null);
-  const [gameState, setGameState] = useState<GameState>({
-    level: 1,
-    currentXp: 0,
-    totalXp: 0,
-    logs: [],
-    classTitle: "NPC",
-    attributes: { STR: 0, END: 0, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0 }, 
-    activeBuff: null,
-    quests: []
-  });
+  const { user, setUser, gameState, setGameState, currentUser, isSyncing, isOnline, narratorText, loadingAi, showLevelUp, addLog } = useGameState();
+  const { timerTimeLeft, isResting, startTimer, stopTimer, addTime } = useTimer();
+
   const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
-  const [isSleepModalOpen, setIsSleepModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-  const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [isQuestModalOpen, setIsQuestModalOpen] = useState(false);
   const [isGuildModalOpen, setIsGuildModalOpen] = useState(false);
+  const [authView, setAuthView] = useState<'login' | 'register'>('login');
   
-  // Profile Summary State
-  const [summaryDate, setSummaryDate] = useState(new Date());
-
   const [selectedActivity, setSelectedActivity] = useState<ActivityType | null>(null);
   const [inputAmount, setInputAmount] = useState('');
-
-  // --- Gym Workout State ---
   const [gymExercise, setGymExercise] = useState('');
   const [gymWeight, setGymWeight] = useState('');
   const [gymReps, setGymReps] = useState('');
-  const [gymRestTime, setGymRestTime] = useState('02:00'); // Default 2 mins
-  const [isResting, setIsResting] = useState(false);
-  const [timerTimeLeft, setTimerTimeLeft] = useState(0);
-
-  // --- Run Activity State ---
+  const [gymRestTime, setGymRestTime] = useState('02:00');
   const [runDistance, setRunDistance] = useState('');
-  const [runDuration, setRunDuration] = useState(''); // MM:SS
-
-  // --- Target Activities State (Shooting, Archery, Knife) ---
-  const [targetTool, setTargetTool] = useState(''); // Weapon name (Curta, Recurvo, Faca Sem Giro)
+  const [runDuration, setRunDuration] = useState('');
+  const [targetTool, setTargetTool] = useState('');
   const [targetDistance, setTargetDistance] = useState('');
   const [targetHits, setTargetHits] = useState({ center: 0, c1: 0, c2: 0, c3: 0, outer: 0 });
-  
-  // Sleep Inputs
-  const [bedTime, setBedTime] = useState('22:00');
-  const [wakeTime, setWakeTime] = useState('06:00');
-
-  const [narratorText, setNarratorText] = useState<string>("Bem-vindo ao LifeRPG. Comece sua jornada!");
-  const [loadingAi, setLoadingAi] = useState(false);
-  const [showLevelUp, setShowLevelUp] = useState(false);
-  
-  // Auth State
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-  // Auth Views: 'login' (email/pass), 'register' (combined with character creation)
-  const [authView, setAuthView] = useState<'login' | 'register'>('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authConfirmPassword, setAuthConfirmPassword] = useState('');
 
-  // Guild State
-  const [currentGuild, setCurrentGuild] = useState<Guild | null>(null);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [guildInputId, setGuildInputId] = useState('');
-  const [guildCreateName, setGuildCreateName] = useState('');
-  const [chatInput, setChatInput] = useState('');
-  const [guildTab, setGuildTab] = useState<'info' | 'chat' | 'raid'>('info');
-
-  // History UI State
-  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const timerIntervalRef = useRef<number | null>(null);
-  const hasNarratorRunRef = useRef(false);
-
-  // Constants
-  const XP_FOR_NEXT_LEVEL_BASE = 100;
-
-  // --- Computed Memos ---
-
-  // Generate unique exercise names for autocomplete
-  const uniqueExercises = useMemo(() => {
-    const exercises = new Set<string>();
-    gameState.logs.forEach(log => {
-        if (log.activityId === 'gym' && log.details?.exercise) {
-            exercises.add(log.details.exercise);
-        }
-    });
-    return Array.from(exercises).sort();
-  }, [gameState.logs]);
-
-  // Group logs by Activity ID for collapsible history
-  const historyGroups = useMemo(() => {
-    const groups: Record<string, ActivityLog[]> = {};
-    gameState.logs.forEach(log => {
-        if (!groups[log.activityId]) groups[log.activityId] = [];
-        groups[log.activityId].push(log);
-    });
-    // Sort groups based on the timestamp of the LATEST log in that group
-    return Object.entries(groups).sort(([, aLogs], [, bLogs]) => {
-        return bLogs[0].timestamp - aLogs[0].timestamp; // Descending
-    });
-  }, [gameState.logs]);
-
-  // --- Daily Summary Logic ---
-  const dailySummary = useMemo(() => {
-    const targetDate = summaryDate.toDateString();
-    
-    // 1. Filtrar logs do dia selecionado
-    const logsForDay = gameState.logs.filter(log => new Date(log.timestamp).toDateString() === targetDate);
-    
-    // 2. Calcular XP total
-    const totalXp = logsForDay.reduce((acc, log) => acc + log.xpGained, 0);
-
-    // 3. Agrupar por atividade para exibição compacta
-    const summaryList: { activity: ActivityType, count: number, totalAmount: number, details: string[] }[] = [];
-    
-    logsForDay.forEach(log => {
-        const act = ACTIVITIES.find(a => a.id === log.activityId);
-        if (!act) return;
-        
-        const existing = summaryList.find(s => s.activity.id === act.id);
-        let detailStr = "";
-        
-        if (log.details?.exercise) detailStr = `${log.details.exercise} (${log.details.weight}kg)`;
-        else if (log.details?.distance) detailStr = `${log.details.distance}km`;
-        else if (log.details?.weapon) detailStr = log.details.weapon;
-        
-        if (existing) {
-            existing.count += 1;
-            existing.totalAmount += log.amount;
-            if (detailStr) existing.details.push(detailStr);
-        } else {
-            summaryList.push({
-                activity: act,
-                count: 1,
-                totalAmount: log.amount,
-                details: detailStr ? [detailStr] : []
-            });
-        }
-    });
-
-    return { totalXp, list: summaryList, count: logsForDay.length };
-  }, [gameState.logs, summaryDate]);
-
-  const changeSummaryDate = (days: number) => {
-      const newDate = new Date(summaryDate);
-      newDate.setDate(newDate.getDate() + days);
-      setSummaryDate(newDate);
-  };
-
-  // --- Connectivity Listeners ---
-  useEffect(() => {
-    const handleOnline = () => {
-        setIsOnline(true);
-        // Try to sync if we have dirty data
-        const needsSync = localStorage.getItem('liferpg_needs_sync') === 'true';
-        if (needsSync && currentUser && user && gameState) {
-             setNarratorText("Conexão restabelecida. Sincronizando dados...");
-             setIsSyncing(true);
-             saveUserDataToCloud(currentUser.uid, user, gameState).then((success) => {
-                 if (success) {
-                     localStorage.removeItem('liferpg_needs_sync');
-                     setNarratorText("Sincronização concluída!");
-                 }
-                 setIsSyncing(false);
-             });
-        }
-    };
-    const handleOffline = () => {
-        setIsOnline(false);
-        setNarratorText("Você está offline. Progresso será salvo localmente.");
-    };
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    return () => {
-        window.removeEventListener('online', handleOnline);
-        window.removeEventListener('offline', handleOffline);
-    };
-  }, [currentUser, user, gameState]);
-
-  // --- Timer Effect ---
-  useEffect(() => {
-    if (isResting && timerTimeLeft > 0) {
-        timerIntervalRef.current = window.setInterval(() => {
-            setTimerTimeLeft(prev => {
-                if (prev <= 1) {
-                    setIsResting(false);
-                    // Play sound or vibrate
-                    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-                    return 0;
-                }
-                return prev - 1;
-            });
-        }, 1000);
-    } else {
-        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    }
-    return () => { if (timerIntervalRef.current) clearInterval(timerIntervalRef.current); };
-  }, [isResting, timerTimeLeft]);
-  
-  // Helper para gerar quests
-  const generateNewQuests = (currentQuests: Quest[], currentClass: string, lastDaily?: number, lastWeekly?: number): { quests: Quest[], lastDaily: number, lastWeekly: number } => {
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const day = now.getDay();
-    const diff = now.getDate() - day;
-    const weekStart = new Date(now.setDate(diff)).setHours(0,0,0,0);
-
-    let newQuests = [...currentQuests];
-    let newLastDaily = lastDaily || 0;
-    let newLastWeekly = lastWeekly || 0;
-    
-    // Separar Pools de Atividade
-    const basicActivities = ACTIVITIES.filter(a => BASIC_ACTIVITY_IDS.includes(a.id));
-    const allClassActivities = ACTIVITIES.filter(a => !BASIC_ACTIVITY_IDS.includes(a.id) && a.category !== 'bad_habit'); // Exclui hábitos nocivos das quests
-
-    // Determinar atividades de classe baseadas no arquétipo do jogador
-    let filteredClassActivities = allClassActivities;
-    
-    if (currentClass.includes('Mago')) {
-        filteredClassActivities = allClassActivities.filter(a => a.category === 'intellect');
-    } else if (currentClass.includes('Healer') || currentClass.includes('Conselheiro')) {
-        filteredClassActivities = allClassActivities.filter(a => a.category === 'social');
-    } else if (currentClass === 'Motorista') {
-        filteredClassActivities = allClassActivities.filter(a => a.id === 'drive');
-    } else if (['Bodybuilder', 'Tanque', 'Lutador', 'Berseker', 'Guerreiro'].some(c => currentClass.includes(c))) {
-        filteredClassActivities = allClassActivities.filter(a => a.primaryAttribute === 'STR' || a.category === 'combat' || a.id === 'gym');
-    } else if (['Corredor', 'Biker', 'Velocista'].some(c => currentClass.includes(c))) {
-        // Agora verifica VIG
-        filteredClassActivities = allClassActivities.filter(a => a.primaryAttribute === 'VIG' || a.id === 'bike' || a.id === 'hiit');
-    } else if (['Atirador', 'Pistoleiro', 'Espadachim'].some(c => currentClass.includes(c))) {
-        filteredClassActivities = allClassActivities.filter(a => a.primaryAttribute === 'DEX' || a.category === 'combat');
-    }
-
-    // Se o filtro for muito restrito e não tiver nada, usa o geral
-    if (filteredClassActivities.length === 0) filteredClassActivities = allClassActivities;
-
-    // Determinar quantidade baseada na classe
-    const isBasicClass = currentClass === 'NPC' || currentClass === 'Aventureiro';
-    const numBasicDaily = isBasicClass ? 3 : 2;
-    const numClassDaily = isBasicClass ? 0 : 1;
-
-    // Helper para calcular alvo baseado na unidade
-    const getTarget = (act: ActivityType, type: 'daily' | 'weekly') => {
-        let dailyBase = 1;
-        if (act.unit === 'km') dailyBase = 3;
-        if (act.unit === 'reps') dailyBase = 20;
-        if (act.unit === 'min') dailyBase = 20;
-        if (act.unit === 'copos') dailyBase = 6;
-        if (act.unit === 'pág/min') dailyBase = 15;
-        if (act.unit === 'sessão') dailyBase = 1;
-        if (act.unit === 'ação') dailyBase = 1;
-        if (act.id === 'drive') dailyBase = 20;
-        if (act.id === 'gym') dailyBase = 3; // 3 series por dia
-        // Sleep removido da geração de quest
-
-        if (type === 'weekly') return dailyBase * 7;
-        return dailyBase;
-    };
-
-    // --- GERAR DIÁRIAS ---
-    if (!lastDaily || lastDaily < todayStart) {
-        newQuests = newQuests.filter(q => q.type !== 'daily');
-        
-        const shuffledBasic = [...basicActivities].sort(() => 0.5 - Math.random());
-        const selectedDaily = shuffledBasic.slice(0, numBasicDaily);
-        
-        if (numClassDaily > 0) {
-            const shuffledClass = [...filteredClassActivities].sort(() => 0.5 - Math.random());
-            if (shuffledClass.length > 0) selectedDaily.push(shuffledClass[0]);
-        }
-
-        selectedDaily.forEach(act => {
-            const target = getTarget(act, 'daily');
-            newQuests.push({
-                id: `daily-${Date.now()}-${act.id}`,
-                type: 'daily',
-                activityId: act.id,
-                targetAmount: target,
-                currentAmount: 0,
-                xpReward: Math.floor(target * act.xpPerUnit * 1.2),
-                isClaimed: false,
-                createdAt: Date.now()
-            });
-        });
-        newLastDaily = Date.now();
-    }
-
-    // --- GERAR SEMANAIS ---
-    if (!lastWeekly || lastWeekly < weekStart) {
-        newQuests = newQuests.filter(q => q.type !== 'weekly');
-
-        const shuffledBasic = [...basicActivities].sort(() => 0.5 - Math.random());
-        const selectedWeekly = shuffledBasic.slice(0, numBasicDaily);
-        
-        if (numClassDaily > 0) {
-            const shuffledClass = [...filteredClassActivities].sort(() => 0.5 - Math.random());
-            if (shuffledClass.length > 0) selectedWeekly.push(shuffledClass[0]);
-        }
-
-        selectedWeekly.forEach(act => {
-            const target = getTarget(act, 'weekly');
-            newQuests.push({
-                id: `weekly-${Date.now()}-${act.id}`,
-                type: 'weekly',
-                activityId: act.id,
-                targetAmount: target,
-                currentAmount: 0,
-                xpReward: Math.floor(target * act.xpPerUnit * 2.0),
-                isClaimed: false,
-                createdAt: Date.now()
-            });
-        });
-        newLastWeekly = Date.now();
-    }
-
-    return { quests: newQuests, lastDaily: newLastDaily, lastWeekly: newLastWeekly };
-  };
-
-  // --- Helper: Calcular Bônus de IMC ---
-  const calculateBmiBonus = (weight: number, height: number): number => {
-    if (weight <= 0 || height <= 0) return 0;
-    const heightM = height / 100;
-    const bmi = weight / (heightM * heightM);
-
-    if (bmi > 40.0) return 20; // Obesidade III - Tankiness extremo
-    if (bmi >= 30.0) return 15; // Obesidade I/II
-    if (bmi >= 25.0) return 10; // Sobrepeso
-    if (bmi >= 23.41) return 5; // "Gordinho" / Normal Alto
-    return 0; // Abaixo de 23.41 não ganha bônus de resistência passiva
-  };
-
-  // Helper para labels de data no histórico
-  const getDayLabel = (timestamp: number) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
-    const check = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-
-    if (check === today) return "Hoje";
-    if (check === yesterday) return "Ontem";
-    return date.toLocaleDateString();
-  };
-
-  // Initialize & Auth Listener
-  useEffect(() => {
-    const savedUser = localStorage.getItem('liferpg_user');
-    const savedGame = localStorage.getItem('liferpg_game');
-    const needsSync = localStorage.getItem('liferpg_needs_sync') === 'true';
-    
-    if (savedUser) setUser(JSON.parse(savedUser));
-    if (savedGame) {
-        const parsedGame = JSON.parse(savedGame);
-        // Fallback robusto para garantir que DRV e VIG existam em saves antigos
-        const safeAttributes = {
-             STR: 0, END: 0, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0,
-             ...parsedGame.attributes
-        };
-        const currentClass = parsedGame.classTitle || "NPC";
-
-        const initialQuests = parsedGame.quests || [];
-        const { quests, lastDaily, lastWeekly } = generateNewQuests(
-            initialQuests, 
-            currentClass,
-            parsedGame.lastDailyQuestGen, 
-            parsedGame.lastWeeklyQuestGen
-        );
-
-        setGameState(prev => ({ 
-            ...prev, 
-            ...parsedGame,
-            classTitle: currentClass,
-            attributes: safeAttributes,
-            quests: quests,
-            lastDailyQuestGen: lastDaily,
-            lastWeeklyQuestGen: lastWeekly
-        }));
-
-        if (parsedGame.guildId && navigator.onLine) {
-            subscribeToGuild(parsedGame.guildId, (guild, messages) => {
-                setCurrentGuild(guild);
-                if (messages) setChatMessages(messages);
-            });
-        }
-    } else {
-        const { quests, lastDaily, lastWeekly } = generateNewQuests([], "NPC", 0, 0);
-        setGameState(prev => ({
-            ...prev,
-            quests,
-            lastDailyQuestGen: lastDaily,
-            lastWeeklyQuestGen: lastWeekly
-        }));
-    }
-
-    const checkLoginErrors = async () => {
-        try {
-            await checkRedirectResult();
-        } catch (error: any) {
-            console.error("Erro no retorno do login:", error);
-            let errorMessage = "Erro desconhecido ao conectar.";
-            if (error.code === 'auth/unauthorized-domain') {
-                errorMessage = `DOMÍNIO BLOQUEADO PELO FIREBASE:\n\nO endereço "${window.location.hostname}" não está na lista de permitidos.`;
-            }
-            alert(errorMessage);
-        }
-    };
-    checkLoginErrors();
-
-    if (auth) {
-      const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-        setCurrentUser(firebaseUser);
-        if (firebaseUser) {
-          setIsSyncing(true);
-          
-          if (needsSync && savedUser && savedGame) {
-              console.log("Local changes detected. Syncing UP to cloud instead of DOWN.");
-              const success = await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
-              if (success) {
-                  localStorage.removeItem('liferpg_needs_sync');
-                  setNarratorText("Sincronização pendente concluída!");
-              }
-              setIsSyncing(false);
-          } else {
-              const cloudData = await loadUserDataFromCloud(firebaseUser.uid);
-              if (cloudData) {
-                const u = cloudData.userProfile;
-                setUser(u);
-                
-                const cloudGame = cloudData.gameState;
-                const safeAttributes = {
-                    STR: 0, END: 0, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0,
-                    ...cloudGame.attributes
-                };
-                const currentClass = cloudGame.classTitle || "NPC";
-                const { quests, lastDaily, lastWeekly } = generateNewQuests(
-                    cloudGame.quests || [],
-                    currentClass,
-                    cloudGame.lastDailyQuestGen, 
-                    cloudGame.lastWeeklyQuestGen
-                );
-
-                const newState = { 
-                    ...prev => ({ ...prev }), // placeholder, we replace whole state
-                    ...cloudGame,
-                    attributes: safeAttributes,
-                    quests,
-                    lastDailyQuestGen: lastDaily,
-                    lastWeeklyQuestGen: lastWeekly
-                };
-                setGameState(newState); 
-
-                if (cloudGame.guildId) {
-                    subscribeToGuild(cloudGame.guildId, (guild, messages) => {
-                        setCurrentGuild(guild);
-                        if (messages) setChatMessages(messages);
-                    });
-                }
-
-                // --- NARRATOR LOGIN TRIGGER ---
-                // Only trigger once per session load
-                if (!hasNarratorRunRef.current) {
-                    hasNarratorRunRef.current = true;
-                    updateNarrator(u, newState, undefined, 'login');
-                }
-
-              } else {
-                  if (savedUser && savedGame) {
-                      await saveUserDataToCloud(firebaseUser.uid, JSON.parse(savedUser), JSON.parse(savedGame));
-                  }
-              }
-              setIsSyncing(false);
-          }
-        }
-      });
-      return () => unsubscribe();
-    }
-  }, []);
-
-  useEffect(() => {
-    if (user) {
-      localStorage.setItem('liferpg_user', JSON.stringify(user));
-      if (currentUser && gameState) {
-          saveUserDataToCloud(currentUser.uid, user, gameState).then((success) => {
-              if (!success) localStorage.setItem('liferpg_needs_sync', 'true');
-          });
-      }
-    }
-  }, [user]);
-
-  useEffect(() => {
-    if (gameState) {
-      localStorage.setItem('liferpg_game', JSON.stringify(gameState));
-      if (currentUser && user) {
-          saveUserDataToCloud(currentUser.uid, user, gameState).then((success) => {
-              if (!success) {
-                  console.log("Offline or Save Failed. Marking for Sync.");
-                  localStorage.setItem('liferpg_needs_sync', 'true');
-              }
-          });
-      }
-    }
-  }, [gameState]);
-
-  // Scroll chat to bottom
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages, isGuildModalOpen, guildTab]);
-
-  const handleGoogleLogin = async () => {
-    try {
-      await loginWithGoogle();
-    } catch (e: any) {
-      alert("Erro ao iniciar login: " + e.message);
-    }
-  };
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-        await loginWithEmail(authEmail, authPassword);
-    } catch (e: any) {
-        let msg = e.message;
-        if (e.code === 'auth/invalid-credential') msg = "E-mail ou senha incorretos.";
-        alert(msg);
-    }
-  };
-
-  // UNIFIED REGISTER + ONBOARDING FUNCTION
-  const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
-      e.preventDefault();
-      
-      // 1. Validar Senhas
-      if (authPassword !== authConfirmPassword) {
-          alert("As senhas não conferem!");
-          return;
-      }
-      if (authPassword.length < 6) {
-          alert("A senha deve ter pelo menos 6 caracteres.");
-          return;
-      }
-
-      const formData = new FormData(e.currentTarget);
-      const name = formData.get('name') as string;
-      const gender = formData.get('gender') as Gender;
-      const dob = formData.get('dob') as string;
-      const profession = formData.get('profession') as string;
-      const weight = Number(formData.get('weight'));
-      const height = Number(formData.get('height'));
-      
-      try {
-          // 2. Criar Conta no Firebase
-          const firebaseUser = await registerWithEmail(authEmail, authPassword);
-          
-          // 3. Gerar Perfil
-          const newUser: UserProfile = {
-              name,
-              dob,
-              weight,
-              height,
-              gender,
-              profession
-          };
-
-          // 4. Gerar GameState Inicial (com bonus de BMI)
-          const bmiBonus = calculateBmiBonus(weight, height);
-          const initialAttributes = { ...gameState.attributes };
-          if (bmiBonus > 0) {
-              initialAttributes.END = bmiBonus;
-          }
-          
-          const newGameState: GameState = {
-              ...gameState,
-              attributes: initialAttributes
-          };
-
-          // 5. Salvar Tudo na Nuvem e Local
-          setUser(newUser);
-          setGameState(newGameState);
-          setCurrentUser(firebaseUser); // Força atualização local imediata
-          
-          await saveUserDataToCloud(firebaseUser.uid, newUser, newGameState);
-          
-          // 6. Narrador Login (First Time)
-          updateNarrator(newUser, newGameState, undefined, 'login');
-
-      } catch (e: any) {
-          let msg = e.message;
-          if (e.code === 'auth/email-already-in-use') msg = "Este e-mail já está cadastrado.";
-          if (e.code === 'auth/weak-password') msg = "A senha é muito fraca.";
-          alert("Erro ao criar conta: " + msg);
-      }
-  };
-
-  const handleLogout = async () => {
-    await logoutUser();
-    setUser(null); // Clear local session view
-    setAuthView('login'); // Reset view
-  };
-
-  const calculateXpForNextLevel = (level: number) => {
-    return level * XP_FOR_NEXT_LEVEL_BASE;
-  };
-
-  // --- LÓGICA DE CLASSES BASEADA EM ATRIBUTOS, IMC E HISTÓRICO ---
-  const determineClass = (attrs: Record<Attribute, number>, weight: number, height: number, logs: ActivityLog[]): string => {
-      // 1. Encontrar Atributo Dominante
-      let maxAttr: Attribute = 'STR';
-      let maxVal = -1;
-      
-      for (const key of Object.keys(attrs) as Attribute[]) {
-        if (attrs[key] > maxVal) {
-            maxVal = attrs[key];
-            maxAttr = key;
-        }
-      }
-
-      if (maxVal < 10) return "NPC"; // Ainda não treinou o suficiente
-
-      // 2. Encontrar Secundário
-      let secondMaxAttr: Attribute | null = null;
-      let secondMaxVal = -1;
-      
-      for (const key of Object.keys(attrs) as Attribute[]) {
-        if (key !== maxAttr && attrs[key] > secondMaxVal) {
-            secondMaxVal = attrs[key];
-            secondMaxAttr = key;
-        }
-      }
-
-      // 3. Regras de Classes (Arquétipos)
-      const isSecondaryRelevant = secondMaxAttr && secondMaxVal > (maxVal * 0.4); // Secundário tem que ser pelo menos 40% do principal
-      
-      // Calcular IMC
-      const heightM = height / 100;
-      const bmi = weight > 0 && height > 0 ? weight / (heightM * heightM) : 22;
-
-      // Analisar Histórico Recente (Últimos 50 logs)
-      let combatCount = 0;
-      let fitnessCount = 0;
-      logs.slice(0, 50).forEach(log => {
-          const act = ACTIVITIES.find(a => a.id === log.activityId);
-          if (act?.category === 'combat') combatCount++;
-          if (act?.category === 'fitness') fitnessCount++;
-      });
-
-      switch (maxAttr) {
-          case 'STR': // Força Dominante
-              // Se for pesado (> 28 IMC) e tiver resistencia, é Tanque
-              if (bmi >= 28 && isSecondaryRelevant && secondMaxAttr === 'END') return "Tanque"; 
-              if (bmi >= 28 && !isSecondaryRelevant) return "Tanque"; // Tanque de força pura (Powerlifter)
-
-              // Se tiver IMC Normal/Baixo
-              if (isSecondaryRelevant && secondMaxAttr === 'DEX') return "Lutador";
-              if (isSecondaryRelevant && secondMaxAttr === 'AGI') return "Berseker";
-              
-              // Diferenciação por Atividade: Guerreiro (Fitness) vs Lutador (Combate) vs Bodybuilder (Pura Estética)
-              if (combatCount > fitnessCount) return "Lutador";
-              if (fitnessCount > combatCount) return "Guerreiro";
-              
-              return "Guerreiro"; // Default para STR sem secondary relevante e IMC normal
-          
-          case 'VIG': // Vigor Dominante (Cardio) - Antigo END
-              if (isSecondaryRelevant && secondMaxAttr === 'STR') return "Biker"; 
-              if (isSecondaryRelevant && secondMaxAttr === 'AGI') return "Corredor"; // Ou Triatleta
-              return "Corredor";
-
-          case 'END': // Resistência Muscular Dominante
-               if (isSecondaryRelevant && secondMaxAttr === 'STR') {
-                   // Se for pesado com muita resistência
-                   if (bmi >= 28) return "Tanque";
-                   return "Crossfitter"; // Alta Repetição + Força + IMC Normal
-               }
-               return "Atleta de Resistência";
-
-          case 'AGI': // Agilidade Dominante
-              if (isSecondaryRelevant && secondMaxAttr === 'DEX') return "Espadachim"; // Rapidez + Técnica
-              return "Velocista"; // Ou Ninja
-
-          case 'DEX': // Destreza Dominante
-              if (isSecondaryRelevant && secondMaxAttr === 'STR') return "Lutador";
-              if (isSecondaryRelevant && secondMaxAttr === 'AGI') return "Espadachim";
-              return "Atirador";
-
-          case 'INT': // Intelecto Dominante
-              return "Mago";
-
-          case 'CHA': // Carisma Dominante
-              if (isSecondaryRelevant && secondMaxAttr === 'INT') return "Conselheiro";
-              return "Healer";
-
-          case 'DRV': // Perícia Volante Dominante
-              return "Motorista";
-          
-          default:
-              return "Aventureiro";
-      }
-  };
-
-  const handleUpdateProfile = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!user) return;
-    const formData = new FormData(e.currentTarget);
-    const newWeight = Number(formData.get('weight'));
-    const newHeight = Number(formData.get('height'));
-
-    // Calcular diferença de Bônus de IMC
-    const oldBonus = calculateBmiBonus(user.weight, user.height);
-    const newBonus = calculateBmiBonus(newWeight, newHeight);
-    const bonusDiff = newBonus - oldBonus;
-
-    const updatedUser: UserProfile = {
-        ...user,
-        weight: newWeight,
-        height: newHeight,
-        gender: formData.get('gender') as Gender,
-        profession: formData.get('profession') as string,
-    };
-    
-    // Atualizar atributos se houve mudança no tier de IMC
-    if (bonusDiff !== 0) {
-        setGameState(prev => ({
-            ...prev,
-            attributes: {
-                ...prev.attributes,
-                END: Math.max(0, (prev.attributes.END || 0) + bonusDiff)
-            }
-        }));
-    }
-
-    // Reavaliar Classe com novos dados físicos
-    const newClassTitle = determineClass(gameState.attributes, newWeight, newHeight, gameState.logs);
-
-    setUser(updatedUser);
-    setGameState(prev => ({
-        ...prev,
-        classTitle: newClassTitle
-    }));
-
-    setIsEditingProfile(false);
-    setNarratorText(`Perfil atualizado! Você parece diferente, ${updatedUser.name}.`);
-  };
-
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !user) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-        const img = new Image();
-        img.onload = () => {
-            const canvas = document.createElement('canvas');
-            const MAX_WIDTH = 300;
-            const MAX_HEIGHT = 300;
-            let width = img.width;
-            let height = img.height;
-            if (width > height) {
-                if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
-            } else {
-                if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
-            }
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            ctx?.drawImage(img, 0, 0, width, height);
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-            setUser({ ...user, avatarImage: dataUrl });
-        };
-        img.src = event.target.result as string;
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const updateNarrator = async (u: UserProfile, g: GameState, activityName?: string, trigger: NarratorTrigger = 'activity') => {
-    if (!isOnline) {
-        if (trigger === 'login') setNarratorText("Bem-vindo ao modo offline. Sua jornada continua!");
-        else setNarratorText("Atividade registrada localmente.");
-        return;
-    }
-    
-    setLoadingAi(true);
-    try {
-      const text = await generateRpgFlavorText(u, g, trigger, activityName);
-      setNarratorText(text);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoadingAi(false);
-    }
-  };
+  const xpNeeded = calculateXpForNextLevel(gameState.level);
 
   const handleLogActivity = () => {
     if (!selectedActivity || !user) return;
-
-    let amount = 0;
-    let xpGained = 0;
-    let details: ActivityLog['details'] | undefined = undefined;
-
-    const newAttributes = { ...gameState.attributes };
-    
-    // --- Lógica de Hábitos Nocivos (Debuffs) ---
-    if (selectedActivity.category === 'bad_habit') {
-        const now = Date.now();
-        let buffMultiplier = 1;
-        let buffDurationHours = 0;
-        let debuffName = "";
-
-        if (selectedActivity.id === 'alcohol') {
-            buffMultiplier = 0.5; // -50% XP
-            buffDurationHours = 12;
-            debuffName = "Ressaca";
-        } else if (selectedActivity.id === 'smoke') {
-            buffMultiplier = 0.7; // -30% XP
-            buffDurationHours = 4;
-            debuffName = "Fôlego Curto";
-        } else if (selectedActivity.id === 'junk_food') {
-            buffMultiplier = 0.8; // -20% XP
-            buffDurationHours = 3;
-            debuffName = "Digestão Pesada";
-        }
-
-        const expireDate = now + (buffDurationHours * 60 * 60 * 1000);
-        
-        setGameState(prev => ({
-            ...prev,
-            activeBuff: {
-                multiplier: buffMultiplier,
-                expiresAt: expireDate,
-                description: `${debuffName}: ${Math.round((buffMultiplier - 1) * 100)}% XP`
-            }
-        }));
-        
-        // Log simples sem XP
-        amount = Number(inputAmount) || 1;
-        xpGained = 0;
-        
-        // Registrar e sair
-        const newLog: ActivityLog = {
-            id: Date.now().toString(),
-            activityId: selectedActivity.id,
-            amount,
-            xpGained,
-            timestamp: Date.now()
-        };
-        
-        setGameState(prev => ({
-            ...prev,
-            logs: [newLog, ...prev.logs].slice(0, 50),
-            // activeBuff já foi setado acima
-        }));
-        
-        setIsActivityModalOpen(false);
-        setNarratorText(`Hábito nocivo registrado. Você sofre de ${debuffName} por ${buffDurationHours} horas.`);
+    if (selectedActivity.id === 'gym' && timerTimeLeft > 0) {
+        alert("Aguarde o cronômetro zerar ou cancele o descanso.");
         return;
     }
 
-    // --- Lógica Especial para Musculação ---
+    let amount = Number(inputAmount) || 1;
+    let xpGained = Math.floor(amount * selectedActivity.xpPerUnit);
+    let details: any = undefined;
+    const newAttrs = { ...gameState.attributes };
+
     if (selectedActivity.id === 'gym') {
-        const weight = Number(gymWeight) || 0;
         const reps = Number(gymReps) || 0;
-        if (reps <= 0) return;
-
-        amount = 1; // 1 série
-        const effectiveWeight = weight > 0 ? weight : 10;
-        xpGained = Math.floor((effectiveWeight * reps) / 5) + 5; 
-
-        details = {
-            exercise: gymExercise || 'Exercício',
-            weight: weight,
-            reps: reps,
-            restTime: 0
-        };
-
-        const attributePoints = Math.ceil(xpGained / 5);
-
-        if (reps <= 6) {
-            newAttributes.STR = (newAttributes.STR || 0) + attributePoints;
-            newAttributes.END = (newAttributes.END || 0) + Math.ceil(attributePoints * 0.5);
-        } else if (reps >= 7 && reps <= 9) {
-            newAttributes.STR = (newAttributes.STR || 0) + Math.ceil(attributePoints * 0.7);
-            newAttributes.END = (newAttributes.END || 0) + Math.ceil(attributePoints * 0.7);
-        } else {
-            newAttributes.END = (newAttributes.END || 0) + attributePoints;
-            newAttributes.STR = (newAttributes.STR || 0) + Math.ceil(attributePoints * 0.5);
+        const weight = Number(gymWeight) || 10;
+        xpGained = Math.floor((weight * reps) / 5) + 5;
+        details = { exercise: gymExercise, weight: weight, reps: reps };
+        const attrPoints = Math.ceil(xpGained / 5);
+        if (reps <= 6) { 
+          newAttrs.STR += attrPoints; 
+          newAttrs.END += Math.ceil(attrPoints * 0.5); 
+        } else if (reps >= 7 && reps <= 9) { 
+          newAttrs.STR += Math.ceil(attrPoints * 0.7); 
+          newAttrs.END += Math.ceil(attrPoints * 0.7); 
+        } else { 
+          newAttrs.END += attrPoints; 
+          newAttrs.STR += Math.ceil(attrPoints * 0.5); 
         }
-
-        const [mins, secs] = gymRestTime.split(':').map(Number);
-        const totalSecs = (mins * 60) + secs;
-        if (totalSecs > 0) {
-            setTimerTimeLeft(totalSecs);
-            setIsResting(true);
-        }
+        const [m, s] = gymRestTime.split(':').map(Number);
+        if (m*60+s > 0) startTimer(m*60+s);
     } else if (selectedActivity.id === 'run') {
-        // --- Lógica Especial para Corrida (Pace) ---
-        const distance = Number(runDistance) || 0;
-        if (distance <= 0) return;
-        
-        // Parse duration from MM:SS
-        const [minsStr, secsStr] = runDuration.split(':');
-        const totalMinutes = (Number(minsStr) || 0) + ((Number(secsStr) || 0) / 60);
-        
-        if (totalMinutes <= 0) return;
-
-        amount = distance;
-        const pace = totalMinutes / distance; // Minutos por Km
-        
-        // XP Base
-        let baseXp = Math.floor(distance * selectedActivity.xpPerUnit);
-        
-        // Multiplicador de Pace
-        let paceMultiplier = 1;
-        let paceLabel = "Normal";
-
-        if (pace <= 3.75) { // 3:45/km = 3.75 min/km
-            paceMultiplier = 1.5; // Elite
-            paceLabel = "Elite";
-        } else if (pace <= 4.5) { // 4:30/km = 4.5 min/km
-            paceMultiplier = 1.2; // Atleta
-            paceLabel = "Rápido";
-        }
-
-        xpGained = Math.floor(baseXp * paceMultiplier);
-
-        // Format pace string for display (MM:SS)
-        const paceMins = Math.floor(pace);
-        const paceSecs = Math.round((pace - paceMins) * 60);
-        const paceString = `${paceMins}:${paceSecs.toString().padStart(2, '0')}`;
-
-        details = {
-            distance: distance,
-            duration: runDuration,
-            pace: `${paceString} /km`
+        const dist = Number(runDistance) || 0;
+        const [mStr, sStr] = runDuration.split(':');
+        const m = Number(mStr) || 0;
+        const s = Number(sStr) || 0;
+        const totalMinutes = m + (s/60);
+        const pace = dist > 0 ? totalMinutes / dist : 0;
+        let mult = pace <= 3.75 ? 1.5 : pace <= 4.5 ? 1.2 : 1;
+        xpGained = Math.floor(dist * 30 * mult);
+        details = { 
+          distance: dist, 
+          duration: runDuration, 
+          pace: dist > 0 ? `${Math.floor(pace)}:${Math.round((pace-Math.floor(pace))*60).toString().padStart(2, '0')}/km` : '0:00/km' 
         };
-
-        // Atributos (Corrida foca em VIG e AGI se for rápido)
-        const pointsEarned = Math.ceil(amount * paceMultiplier);
-        newAttributes.VIG = (newAttributes.VIG || 0) + pointsEarned;
-        
-        if (pace <= 4.5) { // Se for atleta/elite (4:30 ou menos)
-             newAttributes.AGI = (newAttributes.AGI || 0) + Math.ceil(pointsEarned * 0.7);
-        } else {
-             newAttributes.AGI = (newAttributes.AGI || 0) + Math.ceil(pointsEarned * 0.3);
-        }
-
-    } else if (selectedActivity.id === 'shooting' || selectedActivity.id === 'archery' || selectedActivity.id === 'knife_throw') {
-        // --- Lógica Unificada para Tiro, Arco e Faca ---
-        const dist = Number(targetDistance) || 0;
-        const totalShots = targetHits.center + targetHits.c1 + targetHits.c2 + targetHits.c3 + targetHits.outer;
-        
-        if (totalShots <= 0 || dist <= 0) return;
-
-        // Calcular Score Bruto
-        const rawScore = (targetHits.center * 10) + (targetHits.c1 * 5) + (targetHits.c2 * 3) + (targetHits.c3 * 2) + (targetHits.outer * 1);
-        
-        // Fator de Distância (Baseado na Ferramenta/Arma)
-        let distanceFactor = 1;
-        const tool = targetTool.toLowerCase();
-
-        if (selectedActivity.id === 'shooting') {
-            if (tool === 'curta') distanceFactor = 1 + (dist / 10);
-            else if (tool === 'espingarda') distanceFactor = 1 + (dist / 25);
-            else distanceFactor = 1 + (dist / 50); // Longa/Rifle
-        } else if (selectedActivity.id === 'archery') {
-            // Arcos
-            if (tool === 'composto') distanceFactor = 1 + (dist / 30);
-            else if (tool === 'recurvo') distanceFactor = 1.2 + (dist / 20); // Mais difícil
-            else if (tool === 'longbow') distanceFactor = 1.5 + (dist / 20); // Muito difícil
-            else if (tool === 'besta') distanceFactor = 1 + (dist / 40); // Fácil
-        } else if (selectedActivity.id === 'knife_throw') {
-            // Facas (Distâncias menores)
-            if (dist <= 3) distanceFactor = 1;
-            else distanceFactor = 1 + (dist / 3); // Cada 3m aumenta muito a dificuldade
-        }
-
-        xpGained = Math.ceil(rawScore * distanceFactor * 0.2); 
-        if (selectedActivity.id === 'knife_throw') xpGained = Math.ceil(xpGained * 1.2); // Bonus por ser difícil
-        
-        amount = 1; // 1 sessão
-
+        newAttrs.VIG += Math.ceil(dist * mult);
+    } else if (['shooting', 'archery', 'knife_throw'].includes(selectedActivity.id)) {
         details = {
-            weapon: targetTool,
-            distance: dist,
-            hits: { ...targetHits }
+          weapon: targetTool,
+          distance: Number(targetDistance),
+          hits: { ...targetHits }
         };
-
-        const attrPoints = Math.ceil(xpGained / 3);
-        
-        if (selectedActivity.id === 'shooting') {
-             newAttributes.DEX = (newAttributes.DEX || 0) + attrPoints; 
-             if (tool === 'curta' || tool === 'longa') newAttributes.INT = (newAttributes.INT || 0) + Math.ceil(attrPoints * 0.5);
-             else newAttributes.STR = (newAttributes.STR || 0) + Math.ceil(attrPoints * 0.5);
-        } else if (selectedActivity.id === 'archery') {
-             newAttributes.DEX = (newAttributes.DEX || 0) + attrPoints; 
-             // Arco exige força para puxar
-             newAttributes.STR = (newAttributes.STR || 0) + Math.ceil(attrPoints * 0.6);
-        } else if (selectedActivity.id === 'knife_throw') {
-             newAttributes.DEX = (newAttributes.DEX || 0) + attrPoints;
-             // Faca exige Agilidade/Fluidez
-             newAttributes.AGI = (newAttributes.AGI || 0) + Math.ceil(attrPoints * 0.5);
-        }
-
+        if (selectedActivity.primaryAttribute) newAttrs[selectedActivity.primaryAttribute] += 5;
     } else {
-        // Lógica Padrão para outras atividades
-        if (!inputAmount || isNaN(Number(inputAmount))) return;
-        amount = Number(inputAmount);
-        xpGained = Math.floor(amount * selectedActivity.xpPerUnit);
-
-        let pointsEarned = Math.ceil(amount);
-
-        // Ajuste específico para Dirigir: 50km = 1 Ponto de Atributo
-        if (selectedActivity.id === 'drive') {
-             pointsEarned = Math.floor(amount / 50);
-        }
-
-        if (selectedActivity.primaryAttribute) {
-            newAttributes[selectedActivity.primaryAttribute] = (newAttributes[selectedActivity.primaryAttribute] || 0) + pointsEarned;
-        }
-        if (selectedActivity.secondaryAttribute) {
-            newAttributes[selectedActivity.secondaryAttribute] = (newAttributes[selectedActivity.secondaryAttribute] || 0) + Math.ceil(pointsEarned * 0.5);
-        }
+        if (selectedActivity.primaryAttribute) newAttrs[selectedActivity.primaryAttribute] += Math.ceil(amount);
     }
 
-    let buffApplied = false;
-    if (gameState.activeBuff) {
-        const now = Date.now();
-        if (now < gameState.activeBuff.expiresAt) {
-            xpGained = Math.floor(xpGained * gameState.activeBuff.multiplier);
-            buffApplied = true;
-        }
-    }
-    
-    const newLog: ActivityLog = {
+    addLog({
       id: Date.now().toString(),
       activityId: selectedActivity.id,
-      amount,
-      xpGained,
-      timestamp: Date.now(),
-      details: details
-    };
+      amount, xpGained, timestamp: Date.now(), details
+    }, newAttrs);
 
-    let newCurrentXp = gameState.currentXp + xpGained;
-    let newTotalXp = gameState.totalXp + xpGained;
-    let newLevel = gameState.level;
-    let leveledUp = false;
-
-    let xpNeeded = calculateXpForNextLevel(newLevel);
-    while (newCurrentXp >= xpNeeded) {
-      newCurrentXp -= xpNeeded;
-      newLevel++;
-      xpNeeded = calculateXpForNextLevel(newLevel);
-      leveledUp = true;
-    }
-
-    // --- Atualizar Quests ---
-    const updatedQuests = gameState.quests.map(q => {
-        if (!q.isClaimed && q.activityId === selectedActivity.id) {
-            return {
-                ...q,
-                currentAmount: q.currentAmount + amount
-            };
-        }
-        return q;
-    });
-    
-    // Lista de logs atualizada para passar para determineClass
-    const updatedLogs = [newLog, ...gameState.logs].slice(0, 50);
-
-    const newClassTitle = determineClass(newAttributes, user.weight, user.height, updatedLogs);
-
-    const activeBuff = (gameState.activeBuff && Date.now() < gameState.activeBuff.expiresAt) 
-        ? gameState.activeBuff 
-        : null;
-
-    const newState = {
-      ...gameState,
-      level: newLevel,
-      currentXp: newCurrentXp,
-      totalXp: newTotalXp,
-      logs: updatedLogs,
-      attributes: newAttributes,
-      classTitle: newClassTitle,
-      activeBuff: activeBuff,
-      quests: updatedQuests
-    };
-
-    setGameState(newState);
-    
-    // Só fecha o modal se não for Gym (pois Gym tem o timer)
     if (selectedActivity.id !== 'gym') {
-        setIsActivityModalOpen(false);
-        setInputAmount('');
-        setRunDistance('');
-        setRunDuration('');
-        setTargetDistance('');
-        setTargetHits({ center: 0, c1: 0, c2: 0, c3: 0, outer: 0 });
-        setSelectedActivity(null);
-    }
-    
-    if (leveledUp) {
-      setShowLevelUp(true);
-      setTimeout(() => setShowLevelUp(false), 5000);
-      updateNarrator(user!, newState, "LEVEL UP", 'level_up');
-    } else {
-        if (selectedActivity.id !== 'gym') {
-             updateNarrator(user!, newState, selectedActivity.label + (buffApplied ? " (Buffado)" : ""), 'activity');
-        }
+      setIsActivityModalOpen(false);
+      setInputAmount('');
+      setRunDistance('');
+      setRunDuration('');
     }
   };
-//... (Resto do componente mantido)
-  const handleDeleteLog = (logId: string) => {
-    if (!window.confirm("Tem certeza que deseja excluir este registro? Os pontos e XP serão removidos.")) return;
 
-    const logToDelete = gameState.logs.find(l => l.id === logId);
-    if (!logToDelete || !user) return;
-
-    // 1. Remover XP
-    let newTotalXp = Math.max(0, gameState.totalXp - logToDelete.xpGained);
-    
-    // 2. Recalcular Nível
-    let newLevel = 1;
-    let xpAccumulator = 0;
-    let xpForNext = calculateXpForNextLevel(1);
-    while (xpAccumulator + xpForNext <= newTotalXp) {
-        xpAccumulator += xpForNext;
-        newLevel++;
-        xpForNext = calculateXpForNextLevel(newLevel);
-    }
-    let newCurrentXp = newTotalXp - xpAccumulator;
-
-    // 3. Reverter Atributos (Lógica Inversa)
-    const newAttributes = { ...gameState.attributes };
-    const act = ACTIVITIES.find(a => a.id === logToDelete.activityId);
-
-    if (act) {
-        if (act.id === 'gym' && logToDelete.details) {
-            const { reps, weight } = logToDelete.details;
-            const xp = logToDelete.xpGained; 
-            // Note: xpGained was calculated with floor/ceil logic, so we approximate the attribute points removal
-            const attrPoints = Math.ceil(xp / 5);
-            const r = reps || 0;
-
-            if (r <= 6) {
-                newAttributes.STR = Math.max(0, (newAttributes.STR || 0) - attrPoints);
-                newAttributes.END = Math.max(0, (newAttributes.END || 0) - Math.ceil(attrPoints * 0.5));
-            } else if (r >= 7 && r <= 9) {
-                newAttributes.STR = Math.max(0, (newAttributes.STR || 0) - Math.ceil(attrPoints * 0.7));
-                newAttributes.END = Math.max(0, (newAttributes.END || 0) - Math.ceil(attrPoints * 0.7));
-            } else {
-                newAttributes.END = Math.max(0, (newAttributes.END || 0) - attrPoints);
-                newAttributes.STR = Math.max(0, (newAttributes.STR || 0) - Math.ceil(attrPoints * 0.5));
-            }
-        } else if (act.id === 'run' && logToDelete.details) {
-            // Revert Run Logic
-            // We know xpGained. We need to estimate Pace Multiplier to revert attributes.
-            // But we have pointsEarned logic based on amount * multiplier.
-            // Let's use details to reconstruct multiplier.
-            const distance = logToDelete.amount;
-            const [m, s] = (logToDelete.details.duration || "0:00").split(':').map(Number);
-            const totalMin = (m||0) + ((s||0)/60);
-            const pace = distance > 0 ? totalMin/distance : 10;
-            
-            let paceMultiplier = 1;
-            if (pace <= 3.75) paceMultiplier = 1.5;
-            else if (pace <= 4.5) paceMultiplier = 1.2;
-            
-            const pointsEarned = Math.ceil(distance * paceMultiplier);
-            newAttributes.VIG = Math.max(0, (newAttributes.VIG || 0) - pointsEarned);
-
-            if (pace <= 4.5) newAttributes.AGI = Math.max(0, (newAttributes.AGI || 0) - Math.ceil(pointsEarned * 0.7));
-            else newAttributes.AGI = Math.max(0, (newAttributes.AGI || 0) - Math.ceil(pointsEarned * 0.3));
-
-        } else if (['shooting', 'archery', 'knife_throw'].includes(act.id)) {
-             const xp = logToDelete.xpGained;
-             const attrPoints = Math.ceil(xp / 3);
-             
-             if (act.id === 'shooting') {
-                 newAttributes.DEX = Math.max(0, (newAttributes.DEX || 0) - attrPoints);
-                 const tool = logToDelete.details?.weapon || '';
-                 if (tool === 'curta' || tool === 'longa') newAttributes.INT = Math.max(0, (newAttributes.INT || 0) - Math.ceil(attrPoints * 0.5));
-                 else newAttributes.STR = Math.max(0, (newAttributes.STR || 0) - Math.ceil(attrPoints * 0.5));
-             } else if (act.id === 'archery') {
-                 newAttributes.DEX = Math.max(0, (newAttributes.DEX || 0) - attrPoints);
-                 newAttributes.STR = Math.max(0, (newAttributes.STR || 0) - Math.ceil(attrPoints * 0.6));
-             } else if (act.id === 'knife_throw') {
-                 newAttributes.DEX = Math.max(0, (newAttributes.DEX || 0) - attrPoints);
-                 newAttributes.AGI = Math.max(0, (newAttributes.AGI || 0) - Math.ceil(attrPoints * 0.5));
-             }
-        } else {
-             // Standard Logic
-             let pointsEarned = Math.ceil(logToDelete.amount);
-             if (act.id === 'drive') pointsEarned = Math.floor(logToDelete.amount / 50);
-
-             if (act.primaryAttribute) {
-                 newAttributes[act.primaryAttribute] = Math.max(0, (newAttributes[act.primaryAttribute] || 0) - pointsEarned);
-             }
-             if (act.secondaryAttribute) {
-                 newAttributes[act.secondaryAttribute] = Math.max(0, (newAttributes[act.secondaryAttribute] || 0) - Math.ceil(pointsEarned * 0.5));
-             }
-        }
-    }
-
-    // 4. Reverter Progresso de Quest (Apenas se não foi coletada)
-    const updatedQuests = gameState.quests.map(q => {
-        if (!q.isClaimed && q.activityId === logToDelete.activityId) {
-            return {
-                ...q,
-                currentAmount: Math.max(0, q.currentAmount - logToDelete.amount)
-            };
-        }
-        return q;
-    });
-
-    // 5. Remover Log
-    const updatedLogs = gameState.logs.filter(l => l.id !== logId);
-    
-    // 6. Recalcular Classe
-    const newClassTitle = determineClass(newAttributes, user.weight, user.height, updatedLogs);
-
-    setGameState(prev => ({
-        ...prev,
-        level: newLevel,
-        currentXp: newCurrentXp,
-        totalXp: newTotalXp,
-        logs: updatedLogs,
-        attributes: newAttributes,
-        quests: updatedQuests,
-        classTitle: newClassTitle
-    }));
-
-    setNarratorText("Registro removido. O tempo volta atrás...");
+  const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const weight = Number(formData.get('weight'));
+    const height = Number(formData.get('height'));
+    try {
+        const firebaseUser = await registerWithEmail(authEmail, authPassword);
+        const newUser: UserProfile = {
+            name: formData.get('name') as string,
+            dob: formData.get('dob') as string,
+            weight, height,
+            gender: formData.get('gender') as Gender,
+            profession: formData.get('profession') as string
+        };
+        const bmiBonus = calculateBmiBonus(weight, height);
+        const initialAttrs = { STR: 0, END: bmiBonus, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0 };
+        setUser(newUser);
+        setGameState(prev => ({ ...prev, attributes: initialAttrs }));
+        await saveUserDataToCloud(firebaseUser.uid, newUser, { ...gameState, attributes: initialAttrs });
+    } catch (e: any) { alert(e.message); }
   };
-
-  const handleClaimQuest = (questId: string) => {
-      const quest = gameState.quests.find(q => q.id === questId);
-      if (!quest || quest.isClaimed || quest.currentAmount < quest.targetAmount) return;
-
-      const xpGained = quest.xpReward;
-      let newCurrentXp = gameState.currentXp + xpGained;
-      let newTotalXp = gameState.totalXp + xpGained;
-      let newLevel = gameState.level;
-      let leveledUp = false;
-
-      let xpNeeded = calculateXpForNextLevel(newLevel);
-      while (newCurrentXp >= xpNeeded) {
-        newCurrentXp -= xpNeeded;
-        newLevel++;
-        xpNeeded = calculateXpForNextLevel(newLevel);
-        leveledUp = true;
-      }
-
-      const updatedQuests = gameState.quests.map(q => 
-        q.id === questId ? { ...q, isClaimed: true } : q
-      );
-
-      const newState = {
-          ...gameState,
-          level: newLevel,
-          currentXp: newCurrentXp,
-          totalXp: newTotalXp,
-          quests: updatedQuests
-      };
-
-      setGameState(newState);
-      if (leveledUp) {
-          setShowLevelUp(true);
-          setTimeout(() => setShowLevelUp(false), 5000);
-      }
-      setNarratorText("Recompensa de missão coletada!");
-  };
-
-  const handleRegisterSleep = () => {
-    const [bedH, bedM] = bedTime.split(':').map(Number);
-    const [wakeH, wakeM] = wakeTime.split(':').map(Number);
-    let sleepDuration = 0;
-    const bedMinutes = bedH * 60 + bedM;
-    const wakeMinutes = wakeH * 60 + wakeM;
-    
-    if (wakeMinutes >= bedMinutes) {
-        sleepDuration = (wakeMinutes - bedMinutes) / 60;
-    } else {
-        sleepDuration = ((1440 - bedMinutes) + wakeMinutes) / 60;
-    }
-
-    if (sleepDuration <= 0) {
-        alert("Horários inválidos.");
-        return;
-    }
-
-    let percentage = 0;
-    if (sleepDuration <= 9) {
-        percentage = sleepDuration * 2;
-    } else {
-        const base = 9 * 2;
-        const excess = sleepDuration - 9;
-        const penalty = excess * 2;
-        percentage = Math.max(0, base - penalty);
-    }
-    
-    const multiplier = 1 + (percentage / 100);
-    const now = new Date();
-    const expireDate = new Date();
-    expireDate.setHours(bedH, bedM, 0, 0);
-
-    if (expireDate.getTime() < now.getTime()) {
-        if (now.getHours() > bedH) expireDate.setDate(expireDate.getDate() + 1);
-    }
-
-    setGameState(prev => ({
-        ...prev,
-        // Atualiza a missão de sono se ela existir (apenas se existir quest, mas nao gera nova)
-        quests: prev.quests.map(q => q.activityId === 'sleep' && !q.isClaimed ? { ...q, currentAmount: q.currentAmount + 1 } : q),
-        activeBuff: {
-            multiplier: Number(multiplier.toFixed(2)),
-            expiresAt: expireDate.getTime(),
-            description: `Buff de Sono: +${percentage.toFixed(0)}% XP`
-        }
-    }));
-
-    setIsSleepModalOpen(false);
-    setNarratorText(`Sono registrado! Bônus de ${percentage.toFixed(0)}% de XP ativo.`);
-  };
-
-  const handleCreateGuild = async () => {
-      if (!isOnline) {
-          alert("Você precisa estar online para criar uma guilda.");
-          return;
-      }
-      if (!currentUser || !guildCreateName) return;
-      const guildId = await createGuild(guildCreateName, currentUser.uid, user!.name, user!.avatarImage, gameState.classTitle, gameState.level);
-      if (guildId) {
-          setGameState(prev => ({ ...prev, guildId }));
-      }
-  };
-
-  const handleJoinGuild = async () => {
-      if (!isOnline) {
-          alert("Você precisa estar online para entrar em uma guilda.");
-          return;
-      }
-      if (!currentUser || !guildInputId) return;
-      const success = await joinGuild(guildInputId, currentUser.uid, user!.name, user!.avatarImage, gameState.classTitle, gameState.level);
-      if (success) {
-          setGameState(prev => ({ ...prev, guildId: guildInputId }));
-          setGuildInputId('');
-      } else {
-          alert("Guilda não encontrada ou erro ao entrar.");
-      }
-  };
-
-  const handleSendMessage = async () => {
-      if (!currentUser || !currentGuild || !chatInput.trim()) return;
-      await sendMessage(currentGuild.id, currentUser.uid, user!.name, chatInput);
-      setChatInput('');
-  };
-
-  const handleAttackBoss = async () => {
-      if (!isOnline) {
-          alert("Você precisa estar online para atacar o Boss.");
-          return;
-      }
-      if (!currentUser || !currentGuild || !currentGuild.boss) return;
-      const damage = 10 + (gameState.level * 2);
-      await attackBoss(currentGuild.id, damage, user!.name);
-  };
-
-  const getAvatarUrl = useMemo(() => {
-    if (!user) return '';
-    if (user.avatarImage) return user.avatarImage;
-    const seed = user.name.replace(/\s/g, '');
-    let style = 'micah';
-    if (user.gender === 'Masculino') {
-        return `https://api.dicebear.com/9.x/micah/svg?seed=${seed}&baseColor=f9c9b6&hair=fondue,fonze&mouth=laughing,smile`;
-    } else if (user.gender === 'Feminino') {
-        return `https://api.dicebear.com/9.x/micah/svg?seed=${seed}&baseColor=f9c9b6&hair=danny,pixie&mouth=laughing,smile`;
-    } else {
-        return `https://api.dicebear.com/9.x/bottts/svg?seed=${seed}`;
-    }
-  }, [user]);
-
-  const isBuffActive = gameState.activeBuff && Date.now() < gameState.activeBuff.expiresAt;
-  const buffPercentage = isBuffActive ? Math.round((gameState.activeBuff!.multiplier - 1) * 100) : 0;
-  const isDebuff = isBuffActive && gameState.activeBuff!.multiplier < 1;
-  
-  const xpNeeded = calculateXpForNextLevel(gameState.level);
-
-  // Filtragem e Ordenação de Quests
-  const dailyQuests = gameState.quests.filter(q => q.type === 'daily');
-  
-  // Separar Quests Básicas (Sem atributo ou Sono) de Avançadas
-  // ORDENAÇÃO EXPLÍCITA: Sono vem primeiro
-  const basicDailyQuests = dailyQuests.filter(q => {
-      const act = ACTIVITIES.find(a => a.id === q.activityId);
-      return q.activityId === 'sleep' || (act && !act.primaryAttribute);
-  }).sort((a, b) => {
-      if (a.activityId === 'sleep') return -1;
-      if (b.activityId === 'sleep') return 1;
-      return 0;
-  });
-  
-  const advancedDailyQuests = dailyQuests.filter(q => {
-      const act = ACTIVITIES.find(a => a.id === q.activityId);
-      return q.activityId !== 'sleep' && (act && !!act.primaryAttribute);
-  });
-
-  const weeklyQuests = gameState.quests.filter(q => q.type === 'weekly');
-  const unclaimedQuestsCount = gameState.quests.filter(q => q.currentAmount >= q.targetAmount && !q.isClaimed).length;
-
-  // --- Run Pace Calculator ---
-  const currentPace = useMemo(() => {
-      if (!runDistance || !runDuration) return "0:00";
-      const d = Number(runDistance);
-      const [m, s] = runDuration.split(':').map(Number);
-      const totalMin = (m || 0) + ((s || 0) / 60);
-      if (d <= 0 || totalMin <= 0) return "0:00";
-      const p = totalMin / d;
-      const pM = Math.floor(p);
-      const pS = Math.round((p - pM) * 60);
-      return `${pM}:${pS.toString().padStart(2, '0')}`;
-  }, [runDistance, runDuration]);
 
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950">
-        <div className="w-full max-w-md space-y-6">
-          <div className="text-center">
-            <h1 className="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-500 mb-2">LifeRPG</h1>
-            <p className="text-slate-400 text-sm">Gamifique sua Evolução</p>
-          </div>
-
-          <div className="bg-slate-900/80 p-6 rounded-2xl shadow-xl border border-slate-800 backdrop-blur-sm">
-            
-            {/* Abas de Navegação Auth simplificadas */}
+        <div className="w-full max-w-md bg-slate-900/80 p-6 rounded-2xl shadow-xl border border-slate-800 backdrop-blur-sm">
             <div className="flex border-b border-slate-700 mb-6">
-                <button onClick={() => setAuthView('login')} className={`flex-1 pb-2 text-sm font-bold uppercase transition-colors ${authView === 'login' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500 hover:text-slate-300'}`}>
-                    Já tenho conta
-                </button>
-                <button onClick={() => setAuthView('register')} className={`flex-1 pb-2 text-sm font-bold uppercase transition-colors ${authView === 'register' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500 hover:text-slate-300'}`}>
-                    Criar Nova Jornada
-                </button>
+                <button onClick={() => setAuthView('login')} className={`flex-1 pb-2 font-bold ${authView === 'login' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500'}`}>LOGIN</button>
+                <button onClick={() => setAuthView('register')} className={`flex-1 pb-2 font-bold ${authView === 'register' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-500'}`}>NOVA JORNADA</button>
             </div>
-
             {authView === 'login' ? (
-                <form onSubmit={handleLogin} className="space-y-4 animate-fade-in">
-                     <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">E-mail</label>
-                        <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="seu@email.com" />
-                     </div>
-                     <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Senha</label>
-                        <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="******" />
-                     </div>
-                     <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors">
-                         Entrar
-                     </button>
-                     
-                     <div className="flex items-center gap-4 before:h-px before:flex-1 before:bg-slate-700 after:h-px after:flex-1 after:bg-slate-700">
-                       <span className="text-slate-500 text-xs font-bold uppercase">OU</span>
-                     </div>
-                     
-                     <button type="button" onClick={handleGoogleLogin} className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-semibold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
-                         {getIcon("User", "w-4 h-4")} Continuar com Google
-                     </button>
+                <form onSubmit={(e) => { e.preventDefault(); loginWithEmail(authEmail, authPassword); }} className="space-y-4">
+                    <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" placeholder="E-mail" />
+                    <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white" placeholder="Senha" />
+                    <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl">Entrar</button>
+                    <button type="button" onClick={loginWithGoogle} className="w-full bg-slate-800 text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2">{getIcon("User", "w-4 h-4")} Google</button>
                 </form>
             ) : (
-                <form onSubmit={handleRegister} className="space-y-4 animate-fade-in">
-                    <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50 mb-4">
-                        <h3 className="text-xs font-bold text-indigo-400 uppercase mb-3 border-b border-indigo-500/30 pb-1">Dados do Herói</h3>
-                        <div className="space-y-3">
-                            <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Nome do Herói</label>
-                                <input name="name" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Aragorn" />
-                            </div>
-                            <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Gênero</label>
-                                <select name="gender" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none">
-                                    <option value="Masculino">Masculino</option>
-                                    <option value="Feminino">Feminino</option>
-                                    <option value="Outros">Outros</option>
-                                </select>
-                                </div>
-                                <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Data Nasc.</label>
-                                <input type="date" name="dob" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
-                                </div>
-                            </div>
-                            <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Profissão (Vida Real)</label>
-                                <input name="profession" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: Programador..." />
-                            </div>
-                            <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Peso (kg)</label>
-                                    <input type="number" name="weight" step="0.1" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Altura (cm)</label>
-                                    <input type="number" name="height" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
-                                </div>
-                            </div>
-                        </div>
+                <form onSubmit={handleRegister} className="space-y-4">
+                    <input name="name" placeholder="Nome Herói" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2" />
+                    <div className="grid grid-cols-2 gap-2">
+                        <input type="number" name="weight" placeholder="Peso" step="0.1" required className="bg-slate-950 border border-slate-700 p-2 rounded" />
+                        <input type="number" name="height" placeholder="Altura" required className="bg-slate-950 border border-slate-700 p-2 rounded" />
                     </div>
-
-                    <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
-                        <h3 className="text-xs font-bold text-emerald-400 uppercase mb-3 border-b border-emerald-500/30 pb-1">Dados de Acesso</h3>
-                        <div className="space-y-3">
-                            <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">E-mail</label>
-                                <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="seu@email.com" />
-                            </div>
-                            <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Senha</label>
-                                    <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="******" />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Confirmar</label>
-                                    <input 
-                                        type="password" 
-                                        value={authConfirmPassword} 
-                                        onChange={e => setAuthConfirmPassword(e.target.value)} 
-                                        required 
-                                        className={`w-full bg-slate-950 border rounded-lg p-2 text-white focus:ring-2 outline-none ${authPassword && authConfirmPassword && authPassword !== authConfirmPassword ? 'border-red-500 focus:ring-red-500' : 'border-slate-700 focus:ring-blue-500'}`} 
-                                        placeholder="******" 
-                                    />
-                                </div>
-                            </div>
-                             {authPassword && authConfirmPassword && authPassword !== authConfirmPassword && (
-                                <p className="text-red-500 text-xs font-bold text-center">As senhas não conferem!</p>
-                            )}
-                        </div>
-                    </div>
-
-                    <button type="submit" className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-blue-500/20 mt-4">
-                        Iniciar Jornada
-                    </button>
+                    <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded p-2" placeholder="E-mail" />
+                    <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded p-2" placeholder="Senha" />
+                    <input type="password" value={authConfirmPassword} onChange={e => setAuthConfirmPassword(e.target.value)} required className="w-full bg-slate-950 border border-slate-700 rounded p-2" placeholder="Confirmar Senha" />
+                    <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl">Criar Personagem</button>
                 </form>
             )}
-
-          </div>
         </div>
       </div>
     );
@@ -1734,852 +171,133 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-white pb-24 md:pb-6 relative overflow-hidden">
-      
       {showLevelUp && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 backdrop-blur-md animate-fade-in">
-          <div className="text-center transform scale-125 animate-bounce-slow">
-            <h2 className="text-6xl font-black text-yellow-400 drop-shadow-[0_0_15px_rgba(250,204,21,0.5)]">LEVEL UP!</h2>
-            <p className="text-2xl mt-4 text-white font-bold">Você alcançou o Nível {gameState.level}</p>
-          </div>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 backdrop-blur-md animate-fade-in text-center">
+          <h2 className="text-6xl font-black text-yellow-400">LEVEL UP! {gameState.level}</h2>
         </div>
       )}
 
-      {/* Header Profile Card */}
-      <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40 cursor-pointer hover:bg-slate-900 transition-colors" onClick={() => setIsProfileModalOpen(true)}>
-        <div className="max-w-2xl mx-auto p-4">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-slate-700 bg-slate-800 relative">
-                  <img src={getAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                  {isBuffActive && <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border border-slate-900 ${isDebuff ? 'bg-red-600 animate-pulse' : 'bg-purple-600'}`}></div>}
-              </div>
-              <div>
-                <h1 className="font-bold text-lg leading-tight flex items-center gap-2">{user.name}</h1>
-                <div className="flex items-center gap-2">
-                    <span className="text-xs text-blue-400 font-bold tracking-wider uppercase border border-blue-500/30 px-1.5 py-0.5 rounded bg-blue-500/10">{gameState.classTitle}</span>
-                </div>
-              </div>
+      <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40 p-4" onClick={() => setIsProfileModalOpen(true)}>
+        <div className="max-w-2xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-full border-2 border-slate-700 bg-slate-800 overflow-hidden">
+              <img src={user.avatarImage || `https://api.dicebear.com/9.x/micah/svg?seed=${user.name}`} className="w-full h-full object-cover" />
             </div>
-            
-            <div className="flex flex-col items-end gap-1">
-               <div className="flex gap-2">
-                   <button onClick={(e) => { e.stopPropagation(); setIsGuildModalOpen(true); }} className="relative text-[10px] bg-indigo-900/40 text-indigo-400 border border-indigo-700/50 px-2 py-1 rounded flex items-center gap-1 hover:bg-indigo-900/60 transition-colors">
-                        {getIcon("Shield", "w-3 h-3")} Clã
-                   </button>
-                   <button onClick={(e) => { e.stopPropagation(); setIsQuestModalOpen(true); }} className="relative text-[10px] bg-amber-900/40 text-amber-400 border border-amber-700/50 px-2 py-1 rounded flex items-center gap-1 hover:bg-amber-900/60 transition-colors">
-                        {getIcon("Scroll", "w-3 h-3")} Quests
-                        {unclaimedQuestsCount > 0 && <span className="absolute -top-1 -right-1 flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
-                   </button>
-                   {currentUser ? (
-                      isSyncing ? (
-                         <button className="text-[10px] bg-blue-900/50 text-blue-400 border border-blue-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-blue-500 rounded-full animate-spin"></div> Sync</button>
-                      ) : isOnline ? (
-                         <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-emerald-900/50 text-emerald-400 border border-emerald-800 px-2 py-1 rounded flex items-center gap-1 hover:bg-emerald-900 transition-colors"><div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>Salvo</button>
-                      ) : (
-                         <button className="text-[10px] bg-red-900/50 text-red-400 border border-red-800 px-2 py-1 rounded flex items-center gap-1"><div className="w-2 h-2 bg-red-500 rounded-full"></div>Offline</button>
-                      )
-                   ) : (
-                      <button onClick={(e) => { e.stopPropagation(); handleLogout(); }} className="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-1 rounded flex items-center gap-1 hover:text-white hover:border-slate-500 transition-colors">☁️ Login</button>
-                   )}
-               </div>
-               <div className="text-right">
-                <div className="text-3xl font-black text-yellow-400 drop-shadow-sm leading-none">{gameState.level}</div>
-                <div className="text-[10px] text-slate-500 uppercase tracking-widest">Nível</div>
-               </div>
+            <div>
+              <h1 className="font-bold">{user.name}</h1>
+              <span className="text-xs text-blue-400 font-bold uppercase">{gameState.classTitle}</span>
             </div>
           </div>
-          
-          <div className="relative pt-1">
-            <div className="flex mb-2 items-center justify-between">
-              <span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-blue-100 bg-slate-800 border border-slate-700">XP {gameState.currentXp} / {xpNeeded}</span>
-              {isBuffActive && <span className={`text-xs font-bold ${isDebuff ? 'text-red-400' : 'text-purple-400'} animate-pulse flex items-center gap-1`}>{getIcon(isDebuff ? "TriangleAlert" : "Clock", "w-3 h-3")} {buffPercentage}% XP</span>}
-            </div>
-            <ProgressBar current={gameState.currentXp} max={xpNeeded} color="bg-gradient-to-r from-blue-500 to-indigo-400" />
+          <div className="text-right">
+            <div className="text-2xl font-black text-yellow-400 leading-none">{gameState.level}</div>
+            <div className="text-[10px] text-slate-500 uppercase">Nível</div>
           </div>
+        </div>
+        <div className="max-w-2xl mx-auto mt-4">
+          <ProgressBar current={gameState.currentXp} max={xpNeeded} color="bg-gradient-to-r from-blue-500 to-indigo-400" />
         </div>
       </header>
 
       <main className="max-w-2xl mx-auto p-4 space-y-6">
-        <div className="bg-slate-800/40 border border-slate-700 p-4 rounded-xl relative overflow-hidden group">
-          <div className="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>
-          <div className="flex gap-3">
-             <div className="mt-1 min-w-[24px]">{getIcon("Brain", "w-6 h-6 text-blue-400")}</div>
-             <div>
-               <p className="text-sm text-slate-100 italic leading-relaxed">"{narratorText}"</p>
-               {loadingAi && <span className="text-xs text-blue-500 animate-pulse mt-1 block">O Mestre está pensando...</span>}
-             </div>
-          </div>
+        <div className="bg-slate-800/40 border border-slate-700 p-4 rounded-xl flex gap-3 italic text-sm">
+          {getIcon("Brain", "w-6 h-6 text-blue-400")} "{narratorText}"
         </div>
 
-        <div>
-            <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                {getIcon("Activity", "w-4 h-4")} Painel de Missões
-            </h2>
-            
-            {ACTIVITY_CATEGORIES.map((category) => (
-                <div key={category.id} className="mb-6 last:mb-0">
-                     <h3 className={`text-xs font-bold uppercase tracking-wider mb-3 ${category.color} flex items-center gap-2 pl-1 border-l-2 border-slate-700`}>
-                        {getIcon(category.icon, "w-4 h-4")} {category.label}
-                     </h3>
-                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                        {ACTIVITIES.filter(act => category.types.includes(act.category)).map((act) => (
-                        <button
-                            key={act.id}
-                            onClick={() => { 
-                                if (act.id === 'sleep') {
-                                    setIsSleepModalOpen(true);
-                                } else {
-                                    setSelectedActivity(act); 
-                                    setIsActivityModalOpen(true); 
-                                    // Reset inputs
-                                    setTargetTool(
-                                        act.id === 'shooting' ? 'curta' : 
-                                        act.id === 'archery' ? 'recurvo' : 
-                                        act.id === 'knife_throw' ? 'sem_giro' : ''
-                                    );
-                                }
-                            }}
-                            className="flex flex-col items-center justify-center p-3 bg-slate-800/60 hover:bg-slate-700 border border-slate-700 hover:border-blue-500/50 rounded-xl transition-all active:scale-95 group"
-                        >
-                            <div className="mb-2 p-2 rounded-full bg-slate-900 group-hover:bg-slate-800 text-blue-400 group-hover:text-blue-300 transition-colors">
-                            {getIcon(act.icon)}
-                            </div>
-                            <span className="font-semibold text-xs text-center">{act.label}</span>
-                            <span className="text-[10px] text-slate-400 mt-1">{act.xpPerUnit > 0 ? `+${isBuffActive ? Math.floor(act.xpPerUnit * gameState.activeBuff!.multiplier) : act.xpPerUnit} XP` : 'Debuff'}</span>
-                        </button>
-                        ))}
-                     </div>
-                </div>
-            ))}
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          {ACTIVITY_CATEGORIES.map(cat => (
+            <button key={cat.id} onClick={() => { setSelectedActivity(ACTIVITIES.find(a => cat.types.includes(a.category)) || null); setIsActivityModalOpen(true); }} className="p-4 bg-slate-800/60 rounded-xl border border-slate-700 flex flex-col items-center gap-2">
+              <div className={cat.color}>{getIcon(cat.icon)}</div>
+              <span className="text-xs font-bold uppercase">{cat.label}</span>
+            </button>
+          ))}
         </div>
 
-        <div>
-          <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">Histórico</h2>
-          <div className="space-y-3">
-            {gameState.logs.length === 0 ? (
-              <div className="text-center py-8 text-slate-500/50 text-sm italic">Nenhuma atividade registrada hoje.</div>
-            ) : (
-                historyGroups.map(([actId, logs]) => {
-                    const latestLog = logs[0];
-                    const activity = ACTIVITIES.find(a => a.id === actId);
-                    const isExpanded = expandedHistoryId === actId;
-
-                    return (
-                        <div key={actId} className="bg-slate-800/40 border border-slate-700 rounded-lg overflow-hidden transition-all">
-                            {/* Header (Last Activity) */}
-                            <div 
-                                onClick={() => setExpandedHistoryId(isExpanded ? null : actId)}
-                                className="p-3 flex items-center justify-between hover:bg-slate-800/80 transition-colors cursor-pointer"
-                            >
-                                <div className="flex items-center gap-3">
-                                    <div className="p-2 bg-slate-900 rounded-full text-slate-400 relative">
-                                        {getIcon(activity?.icon || 'Activity', 'w-4 h-4')}
-                                        <span className="absolute -top-1 -right-1 bg-slate-700 text-[8px] text-white px-1 rounded-full border border-slate-900">
-                                            {logs.length}
-                                        </span>
-                                    </div>
-                                    <div>
-                                        <div className="font-medium text-sm flex items-center gap-2">
-                                            {activity?.label}
-                                            <span className="text-[10px] text-slate-500 font-normal">
-                                                {new Date(latestLog.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                                            </span>
-                                        </div>
-                                        {latestLog.details?.exercise ? (
-                                            <div className="text-xs text-blue-300">{latestLog.details.exercise} • {latestLog.details.weight}kg x {latestLog.details.reps}</div>
-                                        ) : latestLog.details?.pace ? (
-                                            <div className="text-xs text-emerald-300">{latestLog.details.distance}km • {latestLog.details.duration}</div>
-                                        ) : latestLog.details?.weapon ? (
-                                            <div className="text-xs text-amber-300 capitalize">{latestLog.details.weapon.replace('_', ' ')} • {latestLog.details.distance}m</div>
-                                        ) : (
-                                            <div className="text-xs text-slate-400/70">
-                                                {latestLog.amount} {activity?.unit}
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <div className={`font-bold text-sm ${latestLog.xpGained > 0 ? 'text-blue-400' : 'text-red-400'}`}>{latestLog.xpGained > 0 ? '+' : ''}{latestLog.xpGained} XP</div>
-                                    <div className={`transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`}>
-                                        {getIcon("ChevronRight", "w-4 h-4 text-slate-500")}
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Expanded History */}
-                            {isExpanded && logs.length > 0 && (
-                                <div className="bg-slate-900/30 border-t border-slate-700/50 p-2 space-y-1 animate-fade-in">
-                                    {logs.map((log, index) => {
-                                        const currentDate = getDayLabel(log.timestamp);
-                                        const prevLog = logs[index - 1]; // In the expanded view, prev logic is slightly different due to sort. But groups are sorted descending.
-                                        // Since logs are sorted descending, index-1 is actually the "newer" log visually if we render top-down, but chronologically next is index+1.
-                                        // However, standard history display:
-                                        // We want dividers when the day changes.
-                                        // logs[0] is newest. logs[last] is oldest.
-                                        // If index > 0, compare with index-1. If different day, show divider?
-                                        // Wait, logs are sorted descending.
-                                        // logs[0] = Today 10pm
-                                        // logs[1] = Today 8pm
-                                        // logs[2] = Yesterday
-                                        
-                                        const prevLogDate = index > 0 ? getDayLabel(logs[index - 1].timestamp) : null;
-                                        const showDivider = index === 0 || currentDate !== prevLogDate;
-
-                                        return (
-                                          <React.Fragment key={log.id}>
-                                              {showDivider && (
-                                                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-2 mb-1 pl-2 border-l-2 border-slate-700">
-                                                    {currentDate}
-                                                </div>
-                                              )}
-                                              <div className="flex justify-between items-center p-2 rounded hover:bg-slate-800/50 text-xs text-slate-400 group/item">
-                                                  <div>
-                                                      <span className="inline-block w-12 text-slate-500">{new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                                                      {log.details?.exercise ? (
-                                                          <span>{log.details.exercise} ({log.details.weight}kg x {log.details.reps})</span>
-                                                      ) : log.details?.pace ? (
-                                                          <span>{log.details.distance}km ({log.details.duration})</span>
-                                                      ) : log.details?.weapon ? (
-                                                          <span className="capitalize">{log.details.weapon.replace('_', ' ')} ({log.details.distance}m)</span>
-                                                      ) : (
-                                                          <span>{log.amount} {activity?.unit}</span>
-                                                      )}
-                                                  </div>
-                                                  <div className="flex items-center gap-3">
-                                                      <span className="text-blue-500/70">+{log.xpGained}</span>
-                                                      <button 
-                                                        onClick={(e) => { e.stopPropagation(); handleDeleteLog(log.id); }}
-                                                        className="text-slate-600 hover:text-red-400 transition-colors p-1"
-                                                        title="Excluir Registro"
-                                                      >
-                                                          {getIcon("Trash", "w-3 h-3")}
-                                                      </button>
-                                                  </div>
-                                              </div>
-                                          </React.Fragment>
-                                        );
-                                    })}
-                                </div>
-                            )}
-                        </div>
-                    );
-                })
-            )}
-          </div>
+        <div className="flex justify-between items-center text-slate-400 px-2">
+            <button onClick={() => setIsQuestModalOpen(true)} className="flex items-center gap-2 text-xs font-bold bg-slate-800 p-2 rounded-lg border border-slate-700">{getIcon("Scroll", "w-4 h-4")} QUESTS</button>
+            <button onClick={() => setIsGuildModalOpen(true)} className="flex items-center gap-2 text-xs font-bold bg-slate-800 p-2 rounded-lg border border-slate-700">{getIcon("Shield", "w-4 h-4")} CLÃ</button>
+            <button onClick={logoutUser} className="flex items-center gap-2 text-xs font-bold bg-red-900/20 text-red-400 p-2 rounded-lg border border-red-900/50">{getIcon("LogOut", "w-4 h-4")} SAIR</button>
         </div>
       </main>
 
-      {/* Activity Modal */}
       <Modal isOpen={isActivityModalOpen} onClose={() => setIsActivityModalOpen(false)} title={selectedActivity?.label || 'Registrar'}>
         {selectedActivity?.id === 'gym' && isResting ? (
-             // --- GYM TIMER VIEW ---
-             <div className="flex flex-col items-center justify-center space-y-6 py-6">
-                 <div className="text-center animate-pulse">
-                    <h3 className="text-slate-400 text-sm uppercase tracking-widest font-bold mb-2">Descanso</h3>
-                    <div className="text-6xl font-black text-white tabular-nums">
-                        {Math.floor(timerTimeLeft / 60).toString().padStart(2, '0')}:{(timerTimeLeft % 60).toString().padStart(2, '0')}
-                    </div>
+             <div className="text-center py-6 space-y-6">
+                 <div className="text-6xl font-black tabular-nums">{Math.floor(timerTimeLeft/60)}:{(timerTimeLeft%60).toString().padStart(2, '0')}</div>
+                 <div className="flex gap-4 justify-center">
+                     <button onClick={stopTimer} className="bg-red-900/50 text-red-200 px-6 py-2 rounded-xl font-bold">PULAR</button>
+                     <button onClick={() => addTime(30)} className="bg-blue-900/50 text-blue-200 px-6 py-2 rounded-xl font-bold">+30s</button>
                  </div>
-                 <div className="flex gap-4">
-                     <button onClick={() => { setIsResting(false); setTimerTimeLeft(0); }} className="bg-red-900/50 hover:bg-red-900 text-red-200 px-6 py-3 rounded-xl font-bold flex items-center gap-2">
-                         {getIcon("X", "w-5 h-5")} Pular
-                     </button>
-                     <button onClick={() => setTimerTimeLeft(prev => prev + 30)} className="bg-blue-900/50 hover:bg-blue-900 text-blue-200 px-6 py-3 rounded-xl font-bold flex items-center gap-2">
-                         {getIcon("Plus", "w-5 h-5")} +30s
-                     </button>
-                 </div>
-                 <p className="text-xs text-slate-500">Respire fundo. A próxima série te espera.</p>
              </div>
-        ) : selectedActivity?.id === 'gym' ? (
-             // --- GYM INPUT FORM ---
-             <div className="space-y-4">
-                 <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex items-center gap-3 mb-4">
-                     <div className="p-2 bg-slate-900 rounded-full text-blue-400">{getIcon("Biceps")}</div>
-                     <div className="text-sm text-slate-300">Registre sua série. Pontos: <br/> ≤6 reps (Força) • 7-9 (Híbrido) • ≥10 (Resistência)</div>
-                 </div>
-                 
-                 <div>
-                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Exercício</label>
-                     <input 
-                        type="text" 
-                        value={gymExercise} 
-                        onChange={(e) => setGymExercise(e.target.value)} 
-                        list="exercise-suggestions"
-                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" 
-                        placeholder="Ex: Supino Reto" 
-                        autoFocus 
-                     />
-                     {/* Autocomplete Datalist */}
-                     <datalist id="exercise-suggestions">
-                         {uniqueExercises.map((ex, index) => (
-                             <option key={index} value={ex} />
-                         ))}
-                     </datalist>
-                 </div>
-
-                 <div className="grid grid-cols-2 gap-4">
-                     <div>
-                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Carga (kg)</label>
-                         <input type="number" value={gymWeight} onChange={(e) => setGymWeight(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" />
-                     </div>
-                     <div>
-                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Repetições</label>
-                         <input type="number" value={gymReps} onChange={(e) => setGymReps(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" />
-                     </div>
-                 </div>
-
-                 <div>
-                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1 flex items-center gap-1">{getIcon("Timer", "w-3 h-3")} Intervalo (min:seg)</label>
-                     <input type="time" value={gymRestTime} onChange={(e) => setGymRestTime(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" />
-                 </div>
-
-                 <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 mt-4">
-                     {getIcon("CheckCircle", "w-5 h-5")} Concluir Série
-                 </button>
-             </div>
-        ) : selectedActivity?.id === 'run' ? (
-             // --- RUN INPUT FORM ---
-             <div className="space-y-4">
-                 <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex items-center gap-3 mb-4">
-                     <div className="p-2 bg-slate-900 rounded-full text-blue-400">{getIcon("Wind")}</div>
-                     <div className="text-sm text-slate-300">
-                         Corra mais rápido para ganhar bônus!<br/>
-                         <span className="text-xs text-emerald-400">{'<'} 3:45/km (Elite)</span> • <span className="text-xs text-blue-400">{'<'} 4:30/km (Rápido)</span>
-                     </div>
-                 </div>
-
-                 <div className="grid grid-cols-2 gap-4">
-                     <div>
-                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Distância (km)</label>
-                         <input type="number" value={runDistance} onChange={(e) => setRunDistance(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" autoFocus />
-                     </div>
-                     <div>
-                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Tempo (MM:SS)</label>
-                         <input type="text" value={runDuration} onChange={(e) => {
-                             // Simple mask for MM:SS
-                             let v = e.target.value.replace(/[^0-9:]/g, '');
-                             if (v.length === 2 && !v.includes(':') && e.target.value.length > runDuration.length) v += ':';
-                             setRunDuration(v);
-                         }} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="00:00" maxLength={5} />
-                     </div>
-                 </div>
-
-                 {/* Pace Display */}
-                 <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 flex items-center justify-between">
-                     <div className="flex items-center gap-2 text-slate-400 text-sm">
-                         {getIcon("Gauge", "w-4 h-4")} Pace Estimado
-                     </div>
-                     <div className="text-xl font-bold text-white font-mono">
-                         {currentPace} <span className="text-xs text-slate-500 font-sans">/km</span>
-                     </div>
-                 </div>
-
-                 <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 mt-4">
-                     {getIcon("CheckCircle", "w-5 h-5")} Registrar Corrida
-                 </button>
-             </div>
-        ) : (selectedActivity?.id === 'shooting' || selectedActivity?.id === 'archery' || selectedActivity?.id === 'knife_throw') ? (
-             // --- TARGET PRACTICE INPUT FORM (Shooting, Archery, Knife) ---
-            <div className="space-y-4">
-                <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 mb-2">
-                    <p className="text-xs text-slate-400">XP calculado por Distância, Equipamento e Precisão.</p>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                     <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
-                            {selectedActivity.id === 'shooting' ? 'Arma' : selectedActivity.id === 'archery' ? 'Arco' : 'Técnica'}
-                        </label>
-                        <select value={targetTool} onChange={(e) => setTargetTool(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none">
-                            {selectedActivity.id === 'shooting' && (
-                                <>
-                                    <option value="curta">Arma Curta</option>
-                                    <option value="longa">Arma Longa</option>
-                                    <option value="espingarda">Espingarda</option>
-                                    <option value="rifle">Rifle</option>
-                                </>
-                            )}
-                            {selectedActivity.id === 'archery' && (
-                                <>
-                                    <option value="recurvo">Arco Recurvo</option>
-                                    <option value="composto">Arco Composto</option>
-                                    <option value="longbow">Longbow (Tradicional)</option>
-                                    <option value="besta">Besta</option>
-                                </>
-                            )}
-                            {selectedActivity.id === 'knife_throw' && (
-                                <>
-                                    <option value="sem_giro">Sem Giro (No Spin)</option>
-                                    <option value="meio_giro">Meio Giro (Half Spin)</option>
-                                    <option value="giro_completo">Giro Completo (Full Spin)</option>
-                                    <option value="militar">Estilo Militar</option>
-                                </>
-                            )}
-                        </select>
-                     </div>
-                     <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Distância (m)</label>
-                        <input type="number" value={targetDistance} onChange={(e) => setTargetDistance(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: 10" />
-                     </div>
-                </div>
-
-                <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 flex items-center gap-1">{getIcon("Target", "w-3 h-3")} Registro de Acertos</label>
-                    <div className="grid grid-cols-3 gap-2">
-                        <div className="flex flex-col">
-                            <label className="text-[10px] text-red-400 uppercase font-bold">Centro (10)</label>
-                            <input type="number" value={targetHits.center} onChange={(e) => setTargetHits({...targetHits, center: Number(e.target.value)})} className="bg-slate-950 border border-red-900/50 rounded p-2 text-center text-white" />
-                        </div>
-                        <div className="flex flex-col">
-                            <label className="text-[10px] text-orange-400 uppercase font-bold">1º Cont. (9)</label>
-                            <input type="number" value={targetHits.c1} onChange={(e) => setTargetHits({...targetHits, c1: Number(e.target.value)})} className="bg-slate-950 border border-orange-900/50 rounded p-2 text-center text-white" />
-                        </div>
-                        <div className="flex flex-col">
-                            <label className="text-[10px] text-yellow-400 uppercase font-bold">2º Cont. (8)</label>
-                            <input type="number" value={targetHits.c2} onChange={(e) => setTargetHits({...targetHits, c2: Number(e.target.value)})} className="bg-slate-950 border border-yellow-900/50 rounded p-2 text-center text-white" />
-                        </div>
-                        <div className="flex flex-col">
-                            <label className="text-[10px] text-slate-400 uppercase font-bold">3º Cont. (7)</label>
-                            <input type="number" value={targetHits.c3} onChange={(e) => setTargetHits({...targetHits, c3: Number(e.target.value)})} className="bg-slate-950 border border-slate-700 rounded p-2 text-center text-white" />
-                        </div>
-                        <div className="flex flex-col">
-                            <label className="text-[10px] text-slate-500 uppercase font-bold">Dentro (Ext)</label>
-                            <input type="number" value={targetHits.outer} onChange={(e) => setTargetHits({...targetHits, outer: Number(e.target.value)})} className="bg-slate-950 border border-slate-700 rounded p-2 text-center text-white" />
-                        </div>
-                    </div>
-                </div>
-
-                <button onClick={handleLogActivity} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 mt-4">
-                     {getIcon("Crosshair", "w-5 h-5")} Registrar Disparos
-                 </button>
-            </div>
         ) : (
-            // --- STANDARD INPUT ---
-            <div className="space-y-6">
-            <div className="text-center space-y-2">
-                <div className="inline-block p-4 bg-slate-950 rounded-full text-blue-400 mb-2">{selectedActivity && getIcon(selectedActivity.icon, "w-8 h-8")}</div>
-                <p className="text-slate-300 text-sm">
-                    {selectedActivity?.category === 'bad_habit' ? (
-                        <span className="text-red-400 font-bold">AVISO: Isso aplicará um Debuff no seu ganho de XP.</span>
-                    ) : (
-                        <>Quanto você realizou? <br/><span className="text-blue-400 text-xs">Base: {selectedActivity?.xpPerUnit} XP {isBuffActive && <span className="text-purple-400 ml-1">x {gameState.activeBuff?.multiplier} (Buff)</span>}</span></>
-                    )}
-                </p>
-                {selectedActivity?.primaryAttribute && (
-                    <div className="flex justify-center gap-2 mt-2">
-                        <span className="text-emerald-400 text-xs font-bold uppercase tracking-wider border border-emerald-900 bg-emerald-900/20 px-2 py-1 rounded">
-                            + {selectedActivity.primaryAttribute}
-                        </span>
-                        {selectedActivity.secondaryAttribute && (
-                            <span className="text-emerald-400/70 text-xs font-bold uppercase tracking-wider border border-emerald-900/50 bg-emerald-900/10 px-2 py-1 rounded">
-                                + {selectedActivity.secondaryAttribute}
-                            </span>
-                        )}
+          <div className="space-y-4">
+            {selectedActivity?.id === 'gym' ? (
+                <div className="space-y-4">
+                    <input value={gymExercise} onChange={e => setGymExercise(e.target.value)} placeholder="Exercício" className="w-full bg-slate-950 border border-slate-700 p-3 rounded-lg" />
+                    <div className="grid grid-cols-2 gap-2">
+                        <input type="number" value={gymWeight} onChange={e => setGymWeight(e.target.value)} placeholder="Carga (kg)" className="bg-slate-950 border border-slate-700 p-3 rounded-lg" />
+                        <input type="number" value={gymReps} onChange={e => setGymReps(e.target.value)} placeholder="Reps" className="bg-slate-950 border border-slate-700 p-3 rounded-lg" />
                     </div>
-                )}
-            </div>
-            <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Quantidade ({selectedActivity?.unit})</label>
-                <input type="number" value={inputAmount} onChange={(e) => setInputAmount(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-4 text-2xl text-center text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" autoFocus />
-            </div>
-            <button onClick={handleLogActivity} className={`w-full text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg ${selectedActivity?.category === 'bad_habit' ? 'bg-red-600 hover:bg-red-500 shadow-red-900/20' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20'}`}>
-                {getIcon(selectedActivity?.category === 'bad_habit' ? "TriangleAlert" : "Plus", "w-5 h-5")} 
-                {selectedActivity?.category === 'bad_habit' ? "Confirmar (Aplicar Debuff)" : "Confirmar"}
+                    <select value={gymRestTime} onChange={e => setGymRestTime(e.target.value)} className="w-full bg-slate-950 border border-slate-700 p-3 rounded-lg">
+                        <option value="01:00">1 min</option>
+                        <option value="02:00">2 min</option>
+                        <option value="03:00">3 min</option>
+                    </select>
+                </div>
+            ) : selectedActivity?.id === 'run' ? (
+                <div className="space-y-4">
+                  <input type="number" value={runDistance} onChange={e => setRunDistance(e.target.value)} className="w-full bg-slate-950 border border-slate-700 p-4 text-center rounded-lg" placeholder="Distância (km)" />
+                  <input type="text" value={runDuration} onChange={e => setRunDuration(e.target.value)} className="w-full bg-slate-950 border border-slate-700 p-4 text-center rounded-lg" placeholder="Tempo (MM:SS)" />
+                </div>
+            ) : ['shooting', 'archery', 'knife_throw'].includes(selectedActivity?.id || '') ? (
+                <div className="space-y-4">
+                  <input value={targetTool} onChange={e => setTargetTool(e.target.value)} placeholder="Arma/Arco" className="w-full bg-slate-950 border border-slate-700 p-3 rounded-lg" />
+                  <input type="number" value={targetDistance} onChange={e => setTargetDistance(e.target.value)} placeholder="Distância (m)" className="w-full bg-slate-950 border border-slate-700 p-3 rounded-lg" />
+                  <div className="grid grid-cols-5 gap-1">
+                    {Object.keys(targetHits).map(k => (
+                      <div key={k} className="flex flex-col items-center">
+                        <span className="text-[10px] text-slate-500 uppercase">{k}</span>
+                        <input 
+                          type="number" 
+                          className="w-full bg-slate-950 border border-slate-700 p-1 text-center rounded"
+                          value={(targetHits as any)[k]} 
+                          onChange={e => setTargetHits({...targetHits, [k]: Number(e.target.value)})} 
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+            ) : (
+                <input type="number" value={inputAmount} onChange={e => setInputAmount(e.target.value)} className="w-full bg-slate-950 border border-slate-700 p-4 text-2xl text-center rounded-lg" placeholder="Quantidade" />
+            )}
+            <button 
+                onClick={handleLogActivity} 
+                disabled={selectedActivity?.id === 'gym' && timerTimeLeft > 0}
+                className={`w-full font-bold py-4 rounded-xl flex items-center justify-center gap-2 ${selectedActivity?.id === 'gym' && timerTimeLeft > 0 ? 'bg-slate-700 text-slate-500 opacity-50 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
+            >
+                {selectedActivity?.id === 'gym' && timerTimeLeft > 0 ? `AGUARDE (${Math.floor(timerTimeLeft/60)}:${(timerTimeLeft%60).toString().padStart(2, '0')})` : 'CONFIRMAR'}
             </button>
-            </div>
+            {selectedActivity?.id === 'gym' && timerTimeLeft > 0 && (
+                <button onClick={stopTimer} className="w-full text-xs text-red-400 font-bold uppercase mt-2">Cancelar Tempo de Descanso</button>
+            )}
+          </div>
         )}
       </Modal>
 
-      {/* Sleep Modal */}
-      <Modal isOpen={isSleepModalOpen} onClose={() => setIsSleepModalOpen(false)} title="Descanso do Guerreiro">
-        <div className="space-y-6">
-           <div className="bg-indigo-900/20 border border-indigo-800 rounded-lg p-4 text-sm text-indigo-200"><p>O sono restaura suas energias. Ganhe <strong>+2% XP</strong> por hora (máx 9h). Horas extras causam fadiga.</p></div>
-           <div className="grid grid-cols-2 gap-4">
-              <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Dormiu às</label><input type="time" value={bedTime} onChange={(e) => setBedTime(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"/></div>
-              <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Acordou às</label><input type="time" value={wakeTime} onChange={(e) => setWakeTime(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none"/></div>
-           </div>
-           <button onClick={handleRegisterSleep} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg shadow-indigo-900/20">{getIcon("Moon", "w-5 h-5")} Registrar Descanso</button>
-        </div>
-      </Modal>
-
-      {/* Quest Modal */}
-      <Modal isOpen={isQuestModalOpen} onClose={() => setIsQuestModalOpen(false)} title="Quests e Contratos">
-        <div className="space-y-6">
-             {/* Daily Section */}
-             <div>
-                <h4 className="text-amber-400 font-bold uppercase text-xs tracking-widest mb-2 flex items-center gap-2">{getIcon("Scroll", "w-4 h-4")} Diárias</h4>
-                <div className="space-y-4">
-                    {/* Missões Básicas (Sem Atributos / Sono) */}
-                    {basicDailyQuests.length > 0 && (
-                        <div className="space-y-2">
-                            <h5 className="text-[10px] text-slate-500 uppercase font-bold pl-1">Hábitos Essenciais</h5>
-                            {basicDailyQuests.map(quest => {
-                                const act = ACTIVITIES.find(a => a.id === quest.activityId);
-                                const isComplete = quest.currentAmount >= quest.targetAmount;
-                                const label = quest.activityId === 'sleep' ? 'Registrar Sono' : act?.label;
-                                const unit = quest.activityId === 'sleep' ? 'noite' : act?.unit;
-
-                                return (
-                                    <div key={quest.id} className={`p-3 rounded-lg border flex flex-col gap-2 ${isComplete ? 'bg-emerald-900/20 border-emerald-700' : 'bg-slate-800 border-slate-700'}`}>
-                                        <div className="flex justify-between items-center">
-                                            <span className="text-sm font-semibold text-slate-200">{label}</span>
-                                            <span className="text-xs text-amber-400 font-bold">+{quest.xpReward} XP</span>
-                                        </div>
-                                        <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
-                                            <div className="bg-amber-500 h-full transition-all" style={{ width: `${Math.min(100, (quest.currentAmount / quest.targetAmount) * 100)}%` }}></div>
-                                        </div>
-                                        <div className="flex justify-between items-center text-xs text-slate-400">
-                                            <span>{quest.currentAmount} / {quest.targetAmount} {unit}</span>
-                                            {isComplete && !quest.isClaimed && (
-                                                <button onClick={() => handleClaimQuest(quest.id)} className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded animate-pulse">
-                                                    Resgatar
-                                                </button>
-                                            )}
-                                            {quest.isClaimed && <span className="text-emerald-500 font-bold flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Completo</span>}
-                                        </div>
-                                    </div>
-                                 );
-                            })}
-                        </div>
-                    )}
-                    
-                    {/* Missões Avançadas (Com Atributos) */}
-                    {advancedDailyQuests.length > 0 && (
-                        <div className="space-y-2">
-                             <h5 className="text-[10px] text-slate-500 uppercase font-bold pl-1">Treino & Classe</h5>
-                             {advancedDailyQuests.map(quest => {
-                                 const act = ACTIVITIES.find(a => a.id === quest.activityId);
-                                 const isComplete = quest.currentAmount >= quest.targetAmount;
-                                 return (
-                                    <div key={quest.id} className={`p-3 rounded-lg border flex flex-col gap-2 ${isComplete ? 'bg-emerald-900/20 border-emerald-700' : 'bg-slate-800 border-slate-700'}`}>
-                                        <div className="flex justify-between items-center">
-                                            <span className="text-sm font-semibold text-slate-200">{act?.label}</span>
-                                            <span className="text-xs text-amber-400 font-bold">+{quest.xpReward} XP</span>
-                                        </div>
-                                        <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
-                                            <div className="bg-amber-500 h-full transition-all" style={{ width: `${Math.min(100, (quest.currentAmount / quest.targetAmount) * 100)}%` }}></div>
-                                        </div>
-                                        <div className="flex justify-between items-center text-xs text-slate-400">
-                                            <span>{quest.currentAmount} / {quest.targetAmount} {act?.unit}</span>
-                                            {isComplete && !quest.isClaimed && (
-                                                <button onClick={() => handleClaimQuest(quest.id)} className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded animate-pulse">
-                                                    Resgatar
-                                                </button>
-                                            )}
-                                            {quest.isClaimed && <span className="text-emerald-500 font-bold flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Completo</span>}
-                                        </div>
-                                    </div>
-                                 );
-                             })}
-                        </div>
-                    )}
-                </div>
-             </div>
-             
-             {/* Weekly Section */}
-             <div>
-                <h4 className="text-purple-400 font-bold uppercase text-xs tracking-widest mb-2 flex items-center gap-2">{getIcon("Trophy", "w-4 h-4")} Semanais</h4>
-                <div className="space-y-3">
-                    {weeklyQuests.map(quest => {
-                         const act = ACTIVITIES.find(a => a.id === quest.activityId);
-                         const isComplete = quest.currentAmount >= quest.targetAmount;
-                         const label = quest.activityId === 'sleep' ? 'Registrar Sono' : act?.label;
-                         const unit = quest.activityId === 'sleep' ? 'noite' : act?.unit;
-
-                         return (
-                            <div key={quest.id} className={`p-3 rounded-lg border flex flex-col gap-2 ${isComplete ? 'bg-emerald-900/20 border-emerald-700' : 'bg-slate-800 border-slate-700'}`}>
-                                <div className="flex justify-between items-center">
-                                    <span className="text-sm font-semibold text-slate-200">{label}</span>
-                                    <span className="text-xs text-purple-400 font-bold">+{quest.xpReward} XP</span>
-                                </div>
-                                <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
-                                    <div className="bg-purple-500 h-full transition-all" style={{ width: `${Math.min(100, (quest.currentAmount / quest.targetAmount) * 100)}%` }}></div>
-                                </div>
-                                <div className="flex justify-between items-center text-xs text-slate-400">
-                                    <span>{quest.currentAmount} / {quest.targetAmount} {unit}</span>
-                                    {isComplete && !quest.isClaimed && (
-                                        <button onClick={() => handleClaimQuest(quest.id)} className="px-3 py-1 bg-purple-500 hover:bg-purple-400 text-white font-bold rounded animate-pulse">
-                                            Resgatar
-                                        </button>
-                                    )}
-                                    {quest.isClaimed && <span className="text-emerald-500 font-bold flex items-center gap-1">{getIcon("CheckCircle", "w-3 h-3")} Completo</span>}
-                                </div>
-                            </div>
-                         );
-                    })}
-                </div>
-             </div>
-        </div>
-      </Modal>
-
-      {/* Guild Modal */}
-      <Modal isOpen={isGuildModalOpen} onClose={() => setIsGuildModalOpen(false)} title="Salão da Guilda" large>
-           {!gameState.guildId ? (
-               <div className="space-y-8 text-center py-6">
-                   <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700">
-                       <h3 className="text-xl font-bold text-white mb-2">Entrar em uma Guilda</h3>
-                       <p className="text-slate-400 text-sm mb-4">Digite o ID da guilda para se juntar aos seus aliados.</p>
-                       <div className="flex gap-2">
-                           <input value={guildInputId} onChange={(e) => setGuildInputId(e.target.value)} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg p-3 text-white outline-none" placeholder="ID da Guilda" />
-                           <button onClick={handleJoinGuild} className="bg-blue-600 hover:bg-blue-500 px-4 rounded-lg font-bold">Entrar</button>
-                       </div>
-                   </div>
-                   
-                   <div className="flex items-center gap-4 before:h-px before:flex-1 before:bg-slate-700 after:h-px after:flex-1 after:bg-slate-700">
-                       <span className="text-slate-500 text-xs font-bold uppercase">OU</span>
-                   </div>
-
-                   <div className="bg-indigo-900/20 p-6 rounded-2xl border border-indigo-800">
-                       <h3 className="text-xl font-bold text-indigo-300 mb-2">Fundar nova Guilda</h3>
-                       <p className="text-indigo-200/60 text-sm mb-4">Crie seu próprio legado.</p>
-                       <div className="flex gap-2">
-                           <input value={guildCreateName} onChange={(e) => setGuildCreateName(e.target.value)} className="flex-1 bg-slate-950 border border-indigo-800/50 rounded-lg p-3 text-white outline-none" placeholder="Nome da Guilda" />
-                           <button onClick={handleCreateGuild} className="bg-indigo-600 hover:bg-indigo-500 px-4 rounded-lg font-bold text-white">Criar</button>
-                       </div>
-                   </div>
-               </div>
-           ) : currentGuild ? (
-               <div className="flex flex-col h-[60vh]">
-                   {/* Guild Header */}
-                   <div className="flex justify-between items-center mb-4 bg-slate-800 p-3 rounded-lg">
-                       <div>
-                           <h2 className="text-xl font-bold text-white flex items-center gap-2">{getIcon("Shield", "w-5 h-5 text-indigo-400")} {currentGuild.name}</h2>
-                           <p className="text-xs text-slate-400">Nível {currentGuild.level} • ID: <span className="select-all font-mono bg-slate-900 px-1 rounded">{currentGuild.id}</span></p>
-                       </div>
-                       <div className="flex gap-2">
-                           <button onClick={() => setGuildTab('info')} className={`p-2 rounded ${guildTab === 'info' ? 'bg-indigo-600' : 'bg-slate-700'}`}>{getIcon("Users", "w-4 h-4")}</button>
-                           <button onClick={() => setGuildTab('chat')} className={`p-2 rounded ${guildTab === 'chat' ? 'bg-indigo-600' : 'bg-slate-700'}`}>{getIcon("MessageSquare", "w-4 h-4")}</button>
-                           <button onClick={() => setGuildTab('raid')} className={`p-2 rounded ${guildTab === 'raid' ? 'bg-red-600' : 'bg-slate-700'}`}>{getIcon("Skull", "w-4 h-4")}</button>
-                       </div>
-                   </div>
-
-                   {/* Guild Content */}
-                   <div className="flex-1 overflow-y-auto min-h-0 bg-slate-950/30 rounded-xl border border-slate-800 p-4">
-                       
-                       {guildTab === 'info' && (
-                           <div className="space-y-3">
-                               <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Membros</h3>
-                               {Object.values(currentGuild.members).map((member: GuildMember) => (
-                                   <div key={member.uid} className="flex items-center justify-between p-2 bg-slate-800/50 rounded-lg">
-                                       <div className="flex items-center gap-3">
-                                           <div className="w-8 h-8 bg-slate-700 rounded-full overflow-hidden">
-                                               {member.avatar ? <img src={member.avatar} className="w-full h-full object-cover"/> : <div className="flex items-center justify-center h-full text-xs">?</div>}
-                                           </div>
-                                           <div>
-                                               <div className="font-bold text-sm text-slate-200">{member.name}</div>
-                                               <div className="text-[10px] text-blue-400 uppercase">{member.classTitle} • Lvl {member.level}</div>
-                                           </div>
-                                       </div>
-                                       {member.role === 'leader' && <span className="text-yellow-500">{getIcon("Crown", "w-4 h-4")}</span>}
-                                   </div>
-                               ))}
-                           </div>
-                       )}
-
-                       {guildTab === 'chat' && (
-                           <div className="flex flex-col h-full">
-                               <div className="flex-1 overflow-y-auto space-y-3 pr-2">
-                                   {chatMessages.map(msg => (
-                                       <div key={msg.id} className={`flex flex-col ${msg.senderId === currentUser?.uid ? 'items-end' : 'items-start'}`}>
-                                           <div className={`max-w-[80%] rounded-lg p-2 text-sm ${msg.type === 'system' ? 'bg-yellow-900/30 border border-yellow-800 text-yellow-200 w-full text-center' : msg.senderId === currentUser?.uid ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
-                                               {msg.type !== 'system' && <span className="text-[10px] opacity-50 block mb-0.5">{msg.senderName}</span>}
-                                               {msg.text}
-                                           </div>
-                                       </div>
-                                   ))}
-                                   <div ref={chatEndRef} />
-                               </div>
-                               <div className="mt-4 flex gap-2">
-                                   <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="flex-1 bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-white" placeholder="Mensagem..." />
-                                   <button onClick={handleSendMessage} className="bg-indigo-600 p-2 rounded-lg">{getIcon("ChevronRight")}</button>
-                               </div>
-                           </div>
-                       )}
-
-                       {guildTab === 'raid' && currentGuild.boss && (
-                           <div className="text-center space-y-6">
-                               <div className="animate-pulse-slow">
-                                   <div className="text-6xl mb-2">{currentGuild.boss.image}</div>
-                                   <h3 className="text-2xl font-black text-red-500 uppercase tracking-widest">{currentGuild.boss.name}</h3>
-                                   <p className="text-red-400 text-xs font-bold">Nível {currentGuild.boss.level}</p>
-                               </div>
-                               
-                               <div className="relative pt-1 px-4">
-                                    <div className="flex mb-2 items-center justify-between">
-                                        <span className="text-xs font-bold text-red-200">{currentGuild.boss.currentHp} / {currentGuild.boss.maxHp} HP</span>
-                                    </div>
-                                    <div className="w-full bg-slate-900 rounded-full h-6 overflow-hidden border border-slate-700">
-                                        <div
-                                            className="h-full bg-gradient-to-r from-red-600 to-red-500 transition-all duration-300 ease-out"
-                                            style={{ width: `${(currentGuild.boss.currentHp / currentGuild.boss.maxHp) * 100}%` }}
-                                        ></div>
-                                    </div>
-                               </div>
-
-                               <div className="bg-slate-900/50 p-4 rounded-xl border border-red-900/30">
-                                   <p className="text-sm text-slate-300 mb-4">Realize exercícios de combate para causar dano!</p>
-                                   <button onClick={handleAttackBoss} className="w-full bg-red-700 hover:bg-red-600 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 shadow-lg shadow-red-900/20 active:scale-95 transition-transform">
-                                       {getIcon("Swords", "w-5 h-5")} ATACAR (Gastar Energia)
-                                   </button>
-                                   <p className="text-[10px] text-slate-500 mt-2">Dano baseado no seu Nível ({gameState.level * 2} + 10)</p>
-                               </div>
-                           </div>
-                       )}
-                   </div>
-               </div>
-           ) : (
-               <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div></div>
-           )}
-      </Modal>
-
-      {/* User Profile Modal */}
-      <Modal isOpen={isProfileModalOpen} onClose={() => { setIsProfileModalOpen(false); setIsEditingProfile(false); }} title="Ficha do Personagem" large>
-          <div className="flex flex-col items-center">
-             
-             {/* Edit Button Header */}
-             <div className="w-full flex justify-end mb-[-40px] z-10 relative">
-                 {!isEditingProfile ? (
-                    <button onClick={() => setIsEditingProfile(true)} className="text-slate-400 hover:text-white p-2 rounded bg-slate-800 border border-slate-700">
-                        {getIcon("Pencil", "w-4 h-4")}
-                    </button>
-                 ) : (
-                    <button onClick={() => setIsEditingProfile(false)} className="text-red-400 hover:text-red-300 p-2 rounded bg-slate-800 border border-slate-700">
-                        {getIcon("X", "w-4 h-4")}
-                    </button>
-                 )}
-             </div>
-
-             <div className="relative mb-4">
-                <div className="w-32 h-32 rounded-full border-4 border-slate-700 bg-slate-800 overflow-hidden shadow-2xl relative z-0">
-                    <img src={getAvatarUrl} alt="Avatar Grande" className="w-full h-full object-cover" />
-                </div>
-                {isEditingProfile && (
-                    <>
-                        <input 
-                            type="file" 
-                            accept="image/*" 
-                            ref={fileInputRef} 
-                            onChange={handleImageUpload} 
-                            className="hidden" 
-                        />
-                        <button 
-                            onClick={() => fileInputRef.current?.click()}
-                            className="absolute bottom-0 right-0 bg-blue-600 hover:bg-blue-500 text-white p-2 rounded-full shadow-lg border border-slate-900 transition-colors z-20"
-                        >
-                            {getIcon("Camera", "w-5 h-5")}
-                        </button>
-                    </>
-                )}
-             </div>
-
-             {isEditingProfile ? (
-                 <form onSubmit={handleUpdateProfile} className="w-full space-y-4 mb-6">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Profissão (Vida Real)</label>
-                      <input name="profession" defaultValue={user.profession} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:ring-2 focus:ring-blue-500" />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Gênero</label>
-                            <select name="gender" defaultValue={user.gender} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:ring-2 focus:ring-blue-500">
-                                <option value="Masculino">Masculino</option>
-                                <option value="Feminino">Feminino</option>
-                                <option value="Outros">Outros</option>
-                            </select>
-                        </div>
-                        <div>
-                             <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Altura (cm)</label>
-                             <input type="number" name="height" defaultValue={user.height} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:ring-2 focus:ring-blue-500" />
-                        </div>
-                    </div>
-                    <div>
-                         <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Peso (kg)</label>
-                         <input type="number" step="0.1" name="weight" defaultValue={user.weight} required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:ring-2 focus:ring-blue-500" />
-                    </div>
-                    <button type="submit" className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-2 rounded-lg flex items-center justify-center gap-2">
-                        {getIcon("Save", "w-4 h-4")} Salvar Alterações
-                    </button>
-                 </form>
-             ) : (
-                <>
-                    <h2 className="text-2xl font-bold text-white">{user.name}</h2>
-                    <p className="text-blue-400 font-bold uppercase tracking-widest text-sm mb-1">{gameState.classTitle}</p>
-                    <p className="text-slate-500 text-xs mb-6">Nível {gameState.level} • {user.profession} (Vida Real)</p>
-                    <div className="flex gap-4 text-xs text-slate-400 mb-6 border-t border-b border-slate-800 py-2 w-full justify-center bg-slate-800/20">
-                        <span>{user.height} cm</span>
-                        <span>•</span>
-                        <span>{user.weight} kg</span>
-                        <span>•</span>
-                        <span>{user.gender}</span>
-                    </div>
-                </>
-             )}
-             
-             <div className="w-full bg-slate-950/50 rounded-2xl p-4 border border-slate-800 mb-6">
-                <h3 className="text-center text-xs font-bold text-slate-500 uppercase mb-4">Atributos (Stats)</h3>
-                <RadarChart attributes={gameState.attributes} />
-             </div>
-
-             <div className="grid grid-cols-2 w-full gap-4 text-center mb-6">
-                 <div className="bg-slate-800 p-3 rounded-lg">
-                    <div className="text-xs text-slate-500 uppercase">XP Total</div>
-                    <div className="text-xl font-bold text-white">{gameState.totalXp}</div>
-                 </div>
-                 <div className="bg-slate-800 p-3 rounded-lg">
-                    <div className="text-xs text-slate-500 uppercase">Missões</div>
-                    <div className="text-xl font-bold text-white">{gameState.logs.length}</div>
-                 </div>
-             </div>
-
-             {/* Daily Summary Section */}
-             <div className="w-full bg-slate-800/40 rounded-xl border border-slate-700 p-4">
-                 <div className="flex items-center justify-between mb-4">
-                     <button onClick={() => changeSummaryDate(-1)} className="p-1 hover:bg-slate-700 rounded text-slate-400">{getIcon("ChevronLeft")}</button>
-                     <div className="flex items-center gap-2 text-sm font-bold text-white uppercase tracking-wider">
-                         {getIcon("Calendar", "w-4 h-4 text-blue-400")}
-                         {summaryDate.toLocaleDateString()}
-                     </div>
-                     <button onClick={() => changeSummaryDate(1)} className="p-1 hover:bg-slate-700 rounded text-slate-400">{getIcon("ChevronRight")}</button>
-                 </div>
-
-                 {dailySummary.count > 0 ? (
-                     <div className="space-y-3">
-                         <div className="text-center mb-3">
-                             <span className="text-xs text-slate-500 uppercase font-bold">XP do Dia</span>
-                             <div className="text-xl font-bold text-emerald-400">+{dailySummary.totalXp} XP</div>
-                         </div>
-                         <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                             {dailySummary.list.map((item, idx) => (
-                                 <div key={idx} className="flex justify-between items-start bg-slate-900/50 p-2 rounded text-xs">
-                                     <div>
-                                         <div className="font-bold text-slate-300 flex items-center gap-2">
-                                            {getIcon(item.activity.icon, "w-3 h-3 text-slate-500")}
-                                            {item.activity.label} <span className="text-slate-600">x{item.count}</span>
-                                         </div>
-                                         {item.details.length > 0 && (
-                                             <div className="text-[10px] text-slate-500 mt-1 pl-5">
-                                                 {item.details.slice(0, 3).join(", ")}
-                                                 {item.details.length > 3 && "..."}
-                                             </div>
-                                         )}
-                                     </div>
-                                     <div className="text-slate-400">
-                                         {item.totalAmount} {item.activity.unit}
-                                     </div>
-                                 </div>
-                             ))}
-                         </div>
-                     </div>
-                 ) : (
-                     <div className="text-center py-6 text-slate-500 text-xs italic">
-                         Nenhum registro neste dia.
-                     </div>
-                 )}
-             </div>
-
+      <Modal isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} title="Ficha do Herói" large>
+          <div className="space-y-6">
+              <div className="flex justify-center"><RadarChart attributes={gameState.attributes} /></div>
+              <div className="grid grid-cols-2 gap-4 text-center">
+                  <div className="bg-slate-800 p-3 rounded-lg">
+                      <div className="text-xs text-slate-500 uppercase">XP Total</div>
+                      <div className="text-xl font-bold">{gameState.totalXp.toLocaleString()}</div>
+                  </div>
+                  <div className="bg-slate-800 p-3 rounded-lg">
+                      <div className="text-xs text-slate-500 uppercase">Atributos</div>
+                      <div className="text-xl font-bold">{(Object.values(gameState.attributes) as number[]).reduce((a, b) => a + b, 0)}</div>
+                  </div>
+              </div>
           </div>
       </Modal>
-
     </div>
   );
 }
