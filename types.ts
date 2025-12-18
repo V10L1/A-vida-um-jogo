@@ -126,7 +126,6 @@ export interface GameState {
   quests: Quest[]; // Lista de missoes ativas
   lastDailyQuestGen?: number; // Data da ultima geracao diaria
   lastWeeklyQuestGen?: number; // Data da ultima geracao semanal
-  lastAtrophyCheck?: number; // Data da ultima verificacao de atrofia
   guildId?: string | null; // ID da guilda se tiver
 }
 
