@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { 
   Footprints, 
@@ -10,8 +11,8 @@ import {
   User,
   Activity,
   ChevronRight,
-  ChevronLeft, 
-  Calendar, 
+  ChevronLeft, // New
+  Calendar, // New
   Plus,
   Moon,
   Clock,
@@ -50,18 +51,7 @@ import {
   Beer,
   Pizza,
   TriangleAlert,
-  Trash2,
-  Globe,
-  Map,
-  MapPin,
-  Settings,
-  ShieldAlert,
-  Ban,
-  Menu,
-  LogOut, // New
-  Cloud, // New
-  CloudOff, // New
-  RefreshCw // New
+  Trash2
 } from 'lucide-react';
 
 export const getIcon = (name: string, className?: string) => {
@@ -77,28 +67,13 @@ export const getIcon = (name: string, className?: string) => {
     case 'User': return <User {...props} />;
     case 'Activity': return <Activity {...props} />;
     case 'ChevronRight': return <ChevronRight {...props} />;
-    case 'ChevronLeft': return <ChevronLeft {...props} />;
-    case 'Calendar': return <Calendar {...props} />;
+    case 'ChevronLeft': return <ChevronLeft {...props} />; // New
+    case 'Calendar': return <Calendar {...props} />; // New
     case 'Plus': return <Plus {...props} />;
     case 'Moon': return <Moon {...props} />;
     case 'Clock': return <Clock {...props} />;
     case 'ArrowBigUp': return <ArrowBigUp {...props} />;
-    case 'Globe': return <Globe {...props} />;
-    case 'Menu': return <Menu {...props} />;
     
-    // Map & Admin
-    case 'Map': return <Map {...props} />;
-    case 'MapPin': return <MapPin {...props} />;
-    case 'Settings': return <Settings {...props} />;
-    case 'ShieldAlert': return <ShieldAlert {...props} />;
-    case 'Ban': return <Ban {...props} />;
-
-    // Header Actions
-    case 'LogOut': return <LogOut {...props} />;
-    case 'Cloud': return <Cloud {...props} />;
-    case 'CloudOff': return <CloudOff {...props} />;
-    case 'RefreshCw': return <RefreshCw {...props} />;
-
     // Class Icons
     case 'Wind': return <Wind {...props} />;
     case 'Bike': return <Bike {...props} />;
@@ -132,6 +107,7 @@ export const getIcon = (name: string, className?: string) => {
     case 'Gift': return <Gift {...props} />;
     case 'CheckCircle': return <CheckCircle {...props} />;
     case 'Lock': return <Lock {...props} />;
+    // case 'Shield': return <Shield {...props} />; // Duplicated in switch, removed comment
     case 'Skull': return <Skull {...props} />;
     case 'MessageSquare': return <MessageSquare {...props} />;
     case 'Crown': return <Crown {...props} />;

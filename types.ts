@@ -10,8 +10,6 @@ export interface UserProfile {
   gender: Gender;
   profession: string;
   avatarImage?: string; // Base64 string da imagem customizada
-  role?: 'user' | 'admin'; // Role para painel administrativo
-  guildId?: string;
 }
 
 // Novos Atributos de RPG
@@ -117,28 +115,6 @@ export interface Guild {
     boss?: Boss;
 }
 
-// --- TERRITORY SYSTEM ---
-export interface TerritoryEnemy {
-    name: string;
-    maxHp: number;
-    currentHp: number;
-    level: number;
-    image: string; // Emoji or URL
-    xpReward: number;
-}
-
-export interface Territory {
-    id: string;
-    name: string;
-    lat: number;
-    lng: number;
-    radius: number; // meters
-    ownerId?: string;
-    ownerName?: string;
-    ownerKillCount: number; // Quantos inimigos o dono matou neste local
-    activeEnemy: TerritoryEnemy;
-}
-
 export interface GameState {
   level: number;
   currentXp: number;
@@ -152,35 +128,6 @@ export interface GameState {
   lastWeeklyQuestGen?: number; // Data da ultima geracao semanal
   lastAtrophyCheck?: number; // Data da ultima verificacao de atrofia
   guildId?: string | null; // ID da guilda se tiver
-}
-
-// --- MULTIPLAYER & PVP ---
-
-export interface PublicProfile {
-    uid: string;
-    name: string;
-    level: number;
-    classTitle: string;
-    totalXp: number;
-    avatarImage?: string;
-    attributes: Record<Attribute, number>;
-}
-
-export type DuelStatus = 'pending' | 'active' | 'finished';
-
-export interface Duel {
-    id: string;
-    challengerId: string;
-    challengerName: string;
-    opponentId: string;
-    opponentName: string;
-    activityId: string; // Ex: 'pushup', 'run'
-    targetAmount: number; // Ex: 100 flexoes
-    challengerProgress: number;
-    opponentProgress: number;
-    status: DuelStatus;
-    winnerId?: string;
-    createdAt: number;
 }
 
 // Lista de Classes para Display (Lógica é calculada dinamicamente)
