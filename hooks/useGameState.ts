@@ -1,18 +1,20 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { UserProfile, GameState, ActivityLog, Quest, ACTIVITIES } from '../types';
-import { auth, loadUserDataFromCloud, saveUserDataToCloud, subscribeToGuild } from '../firebase';
+import { auth, loadUserDataFromCloud, saveUserDataToCloud, checkRedirectResult } from '../firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { generateRpgFlavorText, NarratorTrigger } from '../services/geminiService';
-import { calculateXpForNextLevel, determineClass, generateNewQuests, calculateBmiBonus } from '../logic/gameLogic';
+import { calculateXpForNextLevel, determineClass, generateNewQuests } from '../logic/gameLogic';
+
+const initialGameState: GameState = {
+  level: 1, currentXp: 0, totalXp: 0, logs: [], classTitle: "NPC",
+  attributes: { STR: 0, END: 0, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0 },
+  activeBuff: null, quests: []
+};
 
 export function useGameState() {
   const [user, setUser] = useState<UserProfile | null>(null);
-  const [gameState, setGameState] = useState<GameState>({
-    level: 1, currentXp: 0, totalXp: 0, logs: [], classTitle: "NPC",
-    attributes: { STR: 0, END: 0, VIG: 0, AGI: 0, DEX: 0, INT: 0, CHA: 0, DRV: 0 },
-    activeBuff: null, quests: []
-  });
+  const [gameState, setGameState] = useState<GameState>(initialGameState);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -46,6 +48,9 @@ export function useGameState() {
 
   // Auth & Initial Load
   useEffect(() => {
+    // 1. Verificar se houve retorno de redirecionamento do Google
+    checkRedirectResult();
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setCurrentUser(firebaseUser);
       if (firebaseUser) {
@@ -66,6 +71,11 @@ export function useGameState() {
           }
         }
         setIsSyncing(false);
+      } else {
+        // CRITICAL: Limpar estados locais imediatamente no logout para atualizar a UI
+        setUser(null);
+        setGameState(initialGameState);
+        hasNarratorRunRef.current = false;
       }
     });
     return () => unsubscribe();

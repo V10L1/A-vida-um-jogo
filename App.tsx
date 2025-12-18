@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { UserProfile, ACTIVITIES, ActivityType, Gender, Attribute, ATTRIBUTE_LABELS, ActivityLog, Guild, GuildMember, ChatMessage, Quest, GameState } from './types';
 import { getIcon } from './components/Icons';
-import { loginWithGoogle, logoutUser, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail, saveUserDataToCloud, checkRedirectResult } from './firebase';
+import { loginWithGoogle, logoutUser, createGuild, joinGuild, sendMessage, subscribeToGuild, attackBoss, registerWithEmail, loginWithEmail, saveUserDataToCloud } from './firebase';
 import { ProgressBar, Modal, RadarChart } from './components/UIElements';
 import { useGameState } from './hooks/useGameState';
 import { useTimer } from './hooks/useTimer';
@@ -56,15 +56,6 @@ export default function App() {
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const xpNeeded = calculateXpForNextLevel(gameState.level);
-
-  // Verificar redirecionamento do Google no carregamento
-  useEffect(() => {
-    checkRedirectResult().then(u => {
-      if (u) {
-          console.log("Login via Google detectado com sucesso!");
-      }
-    });
-  }, []);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -312,7 +303,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Categories Grid */}
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           {ACTIVITY_CATEGORIES.map(cat => (
             <button key={cat.id} 
@@ -329,7 +319,6 @@ export default function App() {
           ))}
         </div>
 
-        {/* Utility Buttons */}
         <div className="flex justify-between items-center text-slate-400 px-2">
             <button onClick={() => setIsQuestModalOpen(true)} className="flex items-center gap-2 text-xs font-bold bg-slate-800 p-3 rounded-xl border border-slate-700 hover:border-blue-500 transition-all active:scale-95 shadow-md">
                 {getIcon("Scroll", "w-4 h-4")} MISSÕES
@@ -337,13 +326,12 @@ export default function App() {
             <button onClick={() => setIsGuildModalOpen(true)} className="flex items-center gap-2 text-xs font-bold bg-slate-800 p-3 rounded-xl border border-slate-700 hover:border-blue-500 transition-all active:scale-95 shadow-md">
                 {getIcon("Shield", "w-4 h-4")} CLÃ
             </button>
-            <button onClick={logoutUser} className="flex items-center gap-2 text-xs font-bold bg-red-900/20 text-red-400 p-3 rounded-xl border border-red-900/50 hover:bg-red-900/40 transition-all active:scale-95 shadow-md">
+            <button onClick={() => logoutUser()} className="flex items-center gap-2 text-xs font-bold bg-red-900/20 text-red-400 p-3 rounded-xl border border-red-900/50 hover:bg-red-900/40 transition-all active:scale-95 shadow-md">
                 {getIcon("LogOut", "w-4 h-4")} SAIR
             </button>
         </div>
       </main>
 
-      {/* Activity Registration Modal */}
       <Modal isOpen={isActivityModalOpen} onClose={() => setIsActivityModalOpen(false)} title={selectedActivity ? selectedActivity.label : "Selecione a Atividade"}>
         {!selectedActivity ? (
             <div className="grid grid-cols-1 gap-2 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
@@ -460,7 +448,6 @@ export default function App() {
         )}
       </Modal>
 
-      {/* Quest Modal */}
       <Modal isOpen={isQuestModalOpen} onClose={() => setIsQuestModalOpen(false)} title="Mural de Missões">
           <div className="space-y-4">
               {gameState.quests.length === 0 && <p className="text-center text-slate-500 py-10 italic">Nenhuma missão no momento...</p>}
@@ -492,7 +479,6 @@ export default function App() {
           </div>
       </Modal>
 
-      {/* Guild Modal with Tabs */}
       <Modal isOpen={isGuildModalOpen} onClose={() => setIsGuildModalOpen(false)} title="Santuário do Clã" large>
           {!gameState.guildId ? (
               <div className="space-y-6">
@@ -630,7 +616,6 @@ export default function App() {
           )}
       </Modal>
 
-      {/* Profile Detail Modal */}
       <Modal isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} title="Ficha do Herói" large>
           <div className="space-y-6">
               <div className="flex justify-center bg-slate-950/50 rounded-3xl p-6 border border-slate-800 shadow-inner">
